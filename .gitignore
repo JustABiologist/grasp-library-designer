@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Runtime outputs (inputs + GenBank profiles are tracked)
+grasp_library_project/output/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.xlsx
+!requirements.txt

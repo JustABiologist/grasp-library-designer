@@ -1,0 +1,67 @@
+project_name: GRASP_9S_organism_optimized
+genetic_code: 1
+architecture: 14S
+nterm_overhang: AGGT
+assembly_enzyme: "GRASP default \xB7 BsaI + BpiI + BsmBI"
+synthesis_vendor: "Twist \xB7 Express / Low complexity"
+codon_usage_file: grasp_library_project/input/codon_usage.csv
+parts_file: grasp_library_project/input/parts.csv
+target_map_file: grasp_library_project/input/target_map.csv
+forbidden_sites:
+  BsaI: GGTCTC
+  BpiI: GAAGAC
+  BsmBI: CGTCTC
+synthesis:
+  global_gc_min: 0.25
+  global_gc_max: 0.65
+  window_size: 50
+  window_gc_min: 0.2
+  window_gc_max: 0.8
+  max_homopolymer: 9
+  repeat_k: 12
+  max_repeat_count: 1
+  min_oligo_length: 20
+  max_oligo_length: 300
+  min_gene_length: 300
+  max_gene_length: 5000
+codon_optimization:
+  minimum_relative_adaptiveness: 0.2
+weights:
+  codon: 4.0
+  global_gc: 3.0
+  local_gc: 4.0
+  homopolymer: 8.0
+  internal_repeat: 5.0
+  library_similarity: 3.0
+optimizer:
+  iterations_per_part: 25000
+  initial_temperature: 2.0
+  final_temperature: 0.02
+  orthogonal_versions_per_part: 1
+ligation:
+  temperature: 25
+  hours: 18
+  min_efficiency: 0.25
+  min_fidelity: 0.9
+  table_name: "T4 \xB7 18 h \xB7 25 \xB0C (Potapov)"
+  ligation_table: null
+overhang_redesign:
+  enabled: true
+  selection: knee
+pareto:
+  max_evaluations: 40
+  beam_width: 40
+  iterations_per_part: 0
+  junction_flank: 9
+target_rna: UUACACGUG
+synthesis_vendor_meta:
+  vendor: Twist Bioscience
+  product: Clonal Genes / Gene Fragments (aim for Low / Express)
+  url: https://www.twistbioscience.com/products/genes/gene-synthesis
+  notes: "Strictest practical targets for Express eligibility. Twist hard rule: avoid\
+    \ homopolymers \u226514 bp; no CcdB. Global GC 25\u201365%; keep 50 bp windows\
+    \ moderate; minimize repeats \u226512 bp."
+  hard_rules:
+  - Homopolymers must be < 14 bp (Twist hard rule)
+  - Do not include CcdB toxin sequences
+selected_organism: Chlamydomonas reinhardtii nuclear (Kazusa)

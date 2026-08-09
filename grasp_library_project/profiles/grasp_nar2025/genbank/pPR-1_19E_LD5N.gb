@@ -1,0 +1,115 @@
+LOCUS       pPR-1_19E_LD5N          2126 bp    DNA     circular UNA 11-FEB-2025
+DEFINITION  C4.
+ACCESSION   urn.local...dn-j14b1zj
+VERSION     urn.local...dn-j14b1zj
+KEYWORDS    .
+SOURCE      
+  ORGANISM  .
+FEATURES             Location/Qualifiers
+     source          join(1..>10,<108..2126)
+                     /organism="synthetic DNA construct"
+                     /mol_type="other DNA"
+                     /label="source synthetic DNA construct"
+     misc_feature    7..111
+                     /Source="referenceToDocument: urn:local:.:2dp-j14b9po"
+                     /label="pPR-1_19E_LD5N (concatenated sequence 2)"
+                     /note="Geneious type: Concatenated sequence"
+     ligation        7..10
+                     /label="Ligation"
+     overhang        11..14
+                     /created_by="farle"
+                     /label="TGAA"
+     source          <11..>104
+                     /organism="recombinant plasmid"
+                     /mol_type="other DNA"
+                     /label="source recombinant plasmid"
+     source          <11..>104
+                     /organism="synthetic DNA construct"
+                     /mol_type="other DNA"
+                     /label="source synthetic DNA construct"
+     CDS             12..101
+                     /created_by="farle"
+                     /modified_by="farle"
+                     /label="CDS"
+     protein_bind    39..41
+                     /created_by="farle"
+                     /label="D"
+     protein_bind    54..56
+                     /created_by="farle"
+                     /label="N"
+     overhang        100..103
+                     /created_by="farle"
+                     /label="CACG"
+     misc_feature    108..10
+                     /Source="referenceToDocument: urn:local:.:2do-j14b9po"
+                     /label="pAGM1311 (concatenated sequence 1)"
+                     /note="Geneious type: Concatenated sequence"
+     ligation        108..111
+                     /label="Ligation"
+     primer_bind     complement(144..162)
+                     /note="pBR322 vectors, upsteam of EcoRI site, forward 
+                     primer"
+                     /label="pBRforEco"
+     promoter        230..334
+                     /gene="bla"
+                     /label="AmpR promoter"
+     CDS             335..1129
+                     /codon_start=1
+                     /gene="aphA-3"
+                     /product="aminoglycoside phosphotransferase"
+                     /note="confers resistance to kanamycin"
+                     /translation="MAKMRISPELKKLIEKYRCVKDTEGMSPAKVYKLVGENENLYLK
+                     MTDSRYKGTTYDVEREKDMMLWLEGKLPVPKVLHFERHDGWSNLLMSEADGVLCSEEY
+                     EDEQSPEKIIELYAECIRLFHSIDISDCPYTNSLDSRLAELDYLLNNDLADVDCENWE
+                     EDTPFKDPRELYDFLKTEKPEEELVFSHGDLGDSNIFVKDGKVSGFIDLGRSGRADKW
+                     YDIAFCVRSIREDIGEEQYVELFFDLLGIKPDWEKIKYYILLDELF"
+                     /label="KanR"
+     rep_origin      1300..1888
+                     /direction="RIGHT"
+                     /note="high-copy-number ColE1/pMB1/pBR322/pUC origin of 
+                     replication"
+                     /label="ori"
+     primer_bind     1789..1808
+                     /note="pBR322 origin, forward primer"
+                     /label="pBR322ori-F"
+     primer_bind     2042..2059
+                     /note="L4440 vector, forward primer"
+                     /label="L4440"
+ORIGIN      
+        1 gtgaagacat tgaattgttc gataagatgc cagagagaga tgttgtttct tggaacgcaa
+       61 tgatctctgg atacgcacag aatggtagga tagatgaagc acgcgagttg tcttcacgaa
+      121 gtggctcttc agtggacgaa agggcctcgt gatacgccta tttttatagg ttaatgtcat
+      181 gataataatg gtttcttaga cgtcaggtgg cacttttcgg ggaaatgtgc gcggaacccc
+      241 tatttgttta tttttctaaa tacattcaaa tatgtatccg ctcatgagac aataaccctg
+      301 ataaatgctt caataatatt gaaaaaggaa gagtatggct aaaatgagaa tatcaccgga
+      361 attgaaaaaa ctgatcgaaa aataccgctg cgtaaaagat acggaaggaa tgtctcctgc
+      421 taaggtatat aagctggtgg gagaaaatga aaacctatat ttaaaaatga cggacagccg
+      481 gtataaaggg accacctatg atgtggaacg ggaaaaggac atgatgctat ggctggaagg
+      541 aaagctgcct gttccaaagg tcctgcactt tgaacggcat gatggctgga gcaatctgct
+      601 catgagtgag gccgatggcg tcctttgctc ggaagagtat gaagatgaac aaagccctga
+      661 aaagattatc gagctgtatg cggagtgcat caggctcttt cactccatcg acatatcgga
+      721 ttgtccctat acgaatagct tagacagccg cttagccgaa ttggattact tactgaataa
+      781 cgatctggcc gatgtggatt gcgaaaactg ggaagaggac actccattta aagatccgcg
+      841 cgagctgtat gattttttaa agacggaaaa gcccgaagag gaacttgtct tttcccacgg
+      901 cgacctggga gacagcaaca tctttgtgaa agatggcaaa gtaagtggct ttattgatct
+      961 tgggagaagc ggcagggcgg acaagtggta tgacattgcc ttctgcgtcc ggtcgatcag
+     1021 ggaggatatc ggggaagaac agtatgtcga gctatttttt gacttactgg ggatcaagcc
+     1081 tgattgggag aaaataaaat attatatttt actggatgaa ttgttttagc tgtcagacca
+     1141 agtttactca tatatacttt agattgattt aaaacttcat ttttaattta aaaggatcta
+     1201 ggtgaagatc ctttttgata atctcatgac caaaatccct taacgtgagt tttcgttcca
+     1261 ctgagcgtca gaccccgtag aaaagatcaa aggatcttct tgagatcctt tttttctgcg
+     1321 cgtaatctgc tgcttgcaaa caaaaaaacc accgctacca gcggtggttt gtttgccgga
+     1381 tcaagagcta ccaactcttt ttccgaaggt aactggcttc agcagagcgc agataccaaa
+     1441 tactgtcctt ctagtgtagc cgtagttagg ccaccacttc aagaactctg tagcaccgcc
+     1501 tacatacctc gctctgctaa tcctgttacc agtggctgct gccagtggcg ataagtcgtg
+     1561 tcttaccggg ttggactcaa gacgatagtt accggataag gcgcagcggt cgggctgaac
+     1621 ggggggttcg tgcacacagc ccagcttgga gcgaacgacc tacaccgaac tgagatacct
+     1681 acagcgtgag ctatgagaaa gcgccacgct tcccgaaggg agaaaggcgg acaggtatcc
+     1741 ggtaagcggc agggtcggaa caggagagcg cacgagggag cttccagggg gaaacgcctg
+     1801 gtatctttat agtcctgtcg ggtttcgcca cctctgactt gagcgtcgat ttttgtgatg
+     1861 ctcgtcaggg gggcggagcc tatggaaaaa cgccagcaac gcggcctttt tacggttcct
+     1921 ggccttttgc tggccttttg ctcacatgtt ctttcctgcg ttatcccctg attctgtgga
+     1981 taaccgtatt accgcctttg agtgagctga taccgctcgc cgcagccgaa cgaccgagcg
+     2041 cagcgagtca gtgagcgagg aagcggaaga gcgcccaata cgcaaaccgc ctctccccgc
+     2101 gcgttggccg attcattaat cactct
+//
