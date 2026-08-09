@@ -6,5 +6,6 @@ include requirements.txt
 include grasp_library_designer.ipynb
 include grasp_oneshot_designer.ipynb
 recursive-include grasp_library/data *.gb *.md
+recursive-include grasp_library/notebooks *.ipynb
 recursive-include third_party/dawdlib_golden_gate *.py *.csv
 global-exclude __pycache__ *.py[cod] .ipynb_checkpoints* *.checkpoint.*

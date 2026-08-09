@@ -65,6 +65,7 @@ grasp_library = [
   "py.typed",
   "data/profiles/grasp_nar2025/README.md",
   "data/profiles/grasp_nar2025/genbank/*.gb",
+  "notebooks/*.ipynb",
 ]
 dawdlib_golden_gate = [
   "resources/*.csv",

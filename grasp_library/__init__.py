@@ -77,6 +77,14 @@ from .paths import (
     materialize_project,
     project_paths,
 )
+from .colab import write_notebook
+
+try:
+    from importlib.metadata import PackageNotFoundError, version
+
+    __version__ = version("grasp-library-designer")
+except PackageNotFoundError:  # pragma: no cover - editable/source tree
+    __version__ = "0.1.0"
 
 __all__ = [
     "LigationFidelityCalculator",
@@ -148,4 +156,6 @@ __all__ = [
     "bundled_profile_genbank",
     "materialize_project",
     "project_paths",
+    "write_notebook",
+    "__version__",
 ]
