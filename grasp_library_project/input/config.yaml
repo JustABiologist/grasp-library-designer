@@ -17,7 +17,7 @@ synthesis:
   window_size: 50
   window_gc_min: 0.2
   window_gc_max: 0.8
-  max_homopolymer: 9
+  max_homopolymer: 3
   repeat_k: 12
   max_repeat_count: 1
   min_oligo_length: 20

@@ -79,7 +79,7 @@ def build_default_config(input_dir: Path) -> Dict[str, Any]:
             "window_size": 50,
             "window_gc_min": 0.15,
             "window_gc_max": 0.85,
-            "max_homopolymer": 13,
+            "max_homopolymer": 3,
             "repeat_k": 16,
             "max_repeat_count": 1,
             "min_oligo_length": 20,
