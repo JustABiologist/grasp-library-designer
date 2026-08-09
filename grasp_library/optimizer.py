@@ -439,7 +439,16 @@ def simulate_assembled_cds(
     config: Optional[Mapping] = None,
     codon_data: Optional[Mapping[str, Sequence[dict]]] = None,
 ) -> Dict:
-    """Stitch optimized module CDS with shared 4-nt overhangs deduplicated."""
+    """Stitch optimized module CDS with shared 4-nt overhangs deduplicated.
+
+    Uses overhang-bounded inserts from ``parts_full`` coordinates:
+    keep ``cds[oh5 : oh3+4]`` (plus any N-terminal lead bases before ``oh5``
+    on the first module). Downstream modules drop the shared 5′ overhang.
+    This trims GenBank window trail past the 3′ overhang (e.g. C modules)
+    so native 9S ORFs stay in-frame and match the GAP binder protein.
+    """
+    from .binder import rna_to_binder_aa
+
     lib_cols = ["optimized_part_id", "optimized_cds"]
     if "aa_sequence" not in assembly_plan.columns:
         lib_cols.append("aa_sequence")
@@ -474,42 +483,61 @@ def simulate_assembled_cds(
     selected = selected.sort_values(sort_cols)
 
     chunks = []
-    expected_chunks = []
     full_index = (
         parts_full.set_index("part_id") if parts_full is not None else None
     )
+    used_overhang_bounds = False
 
     for i, row in enumerate(selected.itertuples(index=False)):
         cds = clean_dna(row.optimized_cds)
-        aa = str(row.aa_sequence).upper().replace(" ", "")
         part_id = str(row.part_id)
-        if full_index is not None and part_id in full_index.index:
+        if (
+            full_index is not None
+            and part_id in full_index.index
+            and "oh5_mask_start" in full_index.columns
+            and "oh3_mask_start" in full_index.columns
+        ):
             meta = full_index.loc[part_id]
             oh5 = int(meta.oh5_mask_start)
+            oh3 = int(meta.oh3_mask_start)
+            if not (0 <= oh5 < oh3 + 4 <= len(cds)):
+                raise ValueError(
+                    f"{part_id}: overhang window oh5={oh5} oh3={oh3} "
+                    f"incompatible with CDS length {len(cds)}"
+                )
+            # Bounded insert: 5′ overhang … 3′ overhang (inclusive)
+            insert = cds[oh5 : oh3 + 4]
             if i == 0:
-                chunks.append(cds)
-                expected_chunks.append(aa)
+                chunks.append(cds[:oh5] + insert)
             else:
-                chunks.append(cds[oh5 + 4 :])
-                drop_aa = (oh5 + 4) // 3
-                expected_chunks.append(aa[drop_aa:])
+                chunks.append(insert[4:])
+            used_overhang_bounds = True
         else:
+            # Fallback when parts_full coordinates are unavailable
             chunks.append(cds)
-            expected_chunks.append(aa)
 
     assembled_cds = "".join(chunks)
-    expected_protein = "".join(expected_chunks)
+
+    expected_protein = ""
+    expected_source = ""
+    if "target_rna" in selected.columns and len(selected):
+        rna = str(selected["target_rna"].iloc[0]).strip()
+        if rna and rna.upper() != "NAN":
+            expected_protein = rna_to_binder_aa(rna)
+            expected_source = "binder_scaffold"
+
     result = {
         "assembled_cds": assembled_cds,
         "expected_protein": expected_protein,
         "observed_protein": "",
         "translation_verified": False,
         "stitch_warning": "",
+        "stitch_mode": (
+            "overhang_bounded" if used_overhang_bounds else "full_cds_concat"
+        ),
+        "expected_source": expected_source,
     }
     if len(assembled_cds) % 3 != 0:
-        # Shared 4-nt overhangs are not always codon-aligned at every junction
-        # (e.g. D modules with oh5 at index 0). Per-module translation is still
-        # verified during anneal; assembled ORF QC is best-effort.
         result["stitch_warning"] = (
             f"Assembled CDS length {len(assembled_cds)} is not divisible by 3; "
             "skipped ORF translation check."
@@ -519,6 +547,17 @@ def simulate_assembled_cds(
             qc["passed"] = False
             result.update(qc)
         return result
+
+    observed_protein = translate_dna(assembled_cds, genetic_code)
+    result["observed_protein"] = observed_protein
+    result["genetic_code"] = int(genetic_code)
+
+    if not expected_protein:
+        # No independent scaffold — treat ORF translation as the reference.
+        expected_protein = observed_protein
+        expected_source = "assembled_translation"
+        result["expected_protein"] = expected_protein
+        result["expected_source"] = expected_source
 
     if codon_data is not None:
         tx = verify_cds_for_organism(
@@ -531,12 +570,9 @@ def simulate_assembled_cds(
         result["translation_verified"] = bool(tx["ok"])
         result["genetic_code_ok"] = bool(tx["genetic_code_ok"])
         result["codon_table_ok"] = bool(tx["codon_table_ok"])
-        result["genetic_code"] = int(genetic_code)
     else:
-        observed_protein = translate_dna(assembled_cds, genetic_code)
-        result["observed_protein"] = observed_protein
         result["translation_verified"] = observed_protein == expected_protein
-        result["genetic_code"] = int(genetic_code)
+
     if config is not None:
         result.update(synthesis_qc(assembled_cds, config))
     return result

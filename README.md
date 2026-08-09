@@ -23,7 +23,7 @@ Direct links:
 Each notebook installs with:
 
 ```python
-%pip install -q -U "grasp-library-designer>=0.1.0"
+%pip install -q -U "grasp-library-designer>=0.1.2"
 ```
 
 Bundled GenBank modules and Potapov ligation tables ship inside the PyPI package (`materialize_project()`).
