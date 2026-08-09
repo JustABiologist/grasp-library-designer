@@ -57,6 +57,7 @@ from .workflows import (
     ensure_grasp_imported,
     export_optimized_library,
     compile_and_assemble_target,
+    write_oligo_fasta,
     plot_library_pareto_after_anneal,
     run_library_redesign_and_anneal,
 )
@@ -89,7 +90,7 @@ try:
 
     __version__ = version("grasp-library-designer")
 except PackageNotFoundError:  # pragma: no cover - editable/source tree
-    __version__ = "0.1.2"
+    __version__ = "0.1.3"
 
 __all__ = [
     "LigationFidelityCalculator",
@@ -139,6 +140,7 @@ __all__ = [
     "ensure_grasp_imported",
     "export_optimized_library",
     "compile_and_assemble_target",
+    "write_oligo_fasta",
     "plot_library_pareto_after_anneal",
     "run_library_redesign_and_anneal",
     "load_codon_usage",

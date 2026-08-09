@@ -190,6 +190,28 @@ def run_overhang_redesign(
     return front, selected, updated
 
 
+def write_oligo_fasta(
+    library: pd.DataFrame,
+    path: Path,
+    *,
+    id_col: str = "optimized_part_id",
+    seq_col: str = "oligo_sequence_5to3",
+) -> Path:
+    """Write optimized oligo sequences as FASTA (5′→3′)."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if seq_col not in library.columns:
+        raise ValueError(f"Library missing {seq_col!r} — cannot write oligo FASTA")
+    with open(path, "w") as handle:
+        for row in library.itertuples(index=False):
+            seq = clean_dna(getattr(row, seq_col))
+            oid = str(getattr(row, id_col, "oligo"))
+            length = getattr(row, "oligo_length", len(seq))
+            qc = getattr(row, "qc_passed", "")
+            handle.write(f">{oid}|length={length}|qc={qc}\n{seq}\n")
+    return path
+
+
 def run_library_optimize(
     *,
     parts: pd.DataFrame,
@@ -213,7 +235,9 @@ def run_library_optimize(
     library = optimize_library(parts, codon_data, config)
     out = output_dir / "optimized_library.csv"
     library.to_csv(out, index=False)
+    fasta = write_oligo_fasta(library, output_dir / "optimized_grasp_oligos.fasta")
     log(f"Done — {len(library)} sequences → {out}")
+    log(f"Oligo FASTA → {fasta}")
     return library
 
 
@@ -442,14 +466,7 @@ def export_optimized_library(
     xlsx_path = output_dir / "optimized_grasp_library.xlsx"
 
     out.to_csv(csv_path, index=False)
-    with open(fasta_path, "w") as handle:
-        for row in out.itertuples(index=False):
-            handle.write(
-                f">{row.optimized_part_id}"
-                f"|length={row.oligo_length}"
-                f"|qc={row.qc_passed}\n"
-            )
-            handle.write(row.oligo_sequence_5to3 + "\n")
+    write_oligo_fasta(out, fasta_path)
 
     qc_cols = [
         c
@@ -512,16 +529,53 @@ def compile_and_assemble_target(
     rna = str(target_rna).upper().replace("T", "U")
     plan_path = output_dir / f"assembly_plan_{rna}.csv"
     fasta_path = output_dir / f"assembled_{rna}.fasta"
+    oligo_fasta_path = output_dir / f"oligos_{rna}.fasta"
+    oligo_csv_path = output_dir / f"oligos_{rna}.csv"
     plan.to_csv(plan_path, index=False)
     with open(fasta_path, "w") as handle:
-        handle.write(f">GRASP_{rna}\n")
+        handle.write(f">GRASP_{rna}|assembled_CDS|length={len(assembled['assembled_cds'])}\n")
         handle.write(assembled["assembled_cds"] + "\n")
+
+    # Optimized oligos for this target, in GAP assembly order
+    lib_by_id = optimized_library.set_index("optimized_part_id", drop=False)
+    oligo_rows = []
+    for slot, row in enumerate(plan.itertuples(index=False), start=1):
+        oid = str(row.optimized_part_id)
+        if oid not in lib_by_id.index:
+            raise ValueError(f"Missing optimized oligo for {oid}")
+        lib_row = lib_by_id.loc[oid]
+        if isinstance(lib_row, pd.DataFrame):
+            lib_row = lib_row.iloc[0]
+        oligo_rows.append(
+            {
+                "assembly_slot": slot,
+                "part_id": str(row.part_id),
+                "optimized_part_id": oid,
+                "assembly_group": getattr(row, "assembly_group", ""),
+                "assembly_order": getattr(row, "assembly_order", ""),
+                "oligo_length": int(lib_row.oligo_length),
+                "qc_passed": bool(lib_row.qc_passed),
+                "oligo_sequence_5to3": clean_dna(lib_row.oligo_sequence_5to3),
+            }
+        )
+    oligos = pd.DataFrame(oligo_rows)
+    oligos.to_csv(oligo_csv_path, index=False)
+    with open(oligo_fasta_path, "w") as handle:
+        for row in oligos.itertuples(index=False):
+            handle.write(
+                f">{rna}|slot{row.assembly_slot}|{row.optimized_part_id}"
+                f"|length={row.oligo_length}|qc={row.qc_passed}\n"
+                f"{row.oligo_sequence_5to3}\n"
+            )
 
     return {
         "assembly_plan": plan,
         "assembled": assembled,
+        "oligos": oligos,
         "plan_csv": plan_path,
         "assembled_fasta": fasta_path,
+        "oligo_fasta": oligo_fasta_path,
+        "oligo_csv": oligo_csv_path,
         "target_rna": rna,
     }
 
