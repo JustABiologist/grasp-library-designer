@@ -270,11 +270,14 @@ def rescore_pareto_front_after_anneal(
     log: Callable[[str], None] = print,
 ) -> pd.DataFrame:
     """
-    Re-score the Pareto front after junction redesign + library anneal.
+    Re-score every Pareto member with the *same* method after anneal.
 
-    Codon = full CDS; synthesis = full oligo (prefix + CDS + suffix).
-    Selected overhang set uses `optimized_library`; other members use greedy
-    CDS by default (`deep_all=True` fully anneals each).
+    Default: greedy CDS + full-oligo synthesis for all rows (comparable).
+    ``deep_all=True`` fully anneals every member (slow, still uniform).
+
+    If ``optimized_library`` matches ``selected_overhangs``, also attach
+    ``full_anneal_*`` diagnostic columns for that row only — those are not
+    used for knee selection (avoids mixed score sources on the plot).
     """
     if front is None or front.empty:
         raise ValueError("Pareto front is empty")
@@ -293,9 +296,9 @@ def rescore_pareto_front_after_anneal(
     )
     flanks = flanks_from_parts(parts)
 
-    selected_key = None
+    annealed_key = None
     if selected_overhangs:
-        selected_key = ";".join(
+        annealed_key = ";".join(
             f"{k}={v}" for k, v in sorted(selected_overhangs.items())
         )
 
@@ -318,36 +321,54 @@ def rescore_pareto_front_after_anneal(
             greedy=False,
         )
 
+    # Optional diagnostic: full-anneal scores for the library that was actually run
+    full_anneal_scores = None
+    if annealed_key is not None:
+        cds_by_part, aa_by_part = _cds_maps_from_library(optimized_library)
+        oligos_by_part = None
+        if "oligo_sequence_5to3" in optimized_library.columns:
+            oligos_by_part = {}
+            for lib_row in optimized_library.itertuples(index=False):
+                pid = str(lib_row.part_id)
+                if pid in oligos_by_part and getattr(lib_row, "version", 1) != 1:
+                    continue
+                oligos_by_part[pid] = clean_dna(lib_row.oligo_sequence_5to3)
+        if oligos_by_part is None:
+            oligos_by_part = build_oligos_from_cds(cds_by_part, flanks)
+        part_ids = sorted(cds_by_part)
+        sel = parse_overhang_selection(annealed_key)
+        full_anneal_scores = evaluate_design(
+            overhangs=list(sel.values()),
+            cds_sequences=[cds_by_part[p] for p in part_ids],
+            aa_sequences=[aa_by_part[p] for p in part_ids],
+            codon_data=codon_data,
+            config=config,
+            fidelity_calculator=calc,
+            cds_by_part=cds_by_part,
+            aa_by_part=aa_by_part,
+            oligos_by_part=oligos_by_part,
+            flanks_by_part=flanks,
+            junction_map=junction_map,
+        )
+
     rows = []
     n = len(front)
+    source = "full_anneal" if deep_all else "greedy_cds"
+    log(
+        f"Re-scoring {n} Pareto members uniformly ({source}, full-oligo synthesis)…"
+    )
     for i, row in enumerate(front.itertuples(index=False), start=1):
         overhangs_text = str(row.overhangs)
         selection = parse_overhang_selection(overhangs_text)
-        oligos_by_part = None
 
-        if selected_key is not None and overhangs_text == selected_key:
-            log(f"[{i}/{n}] Scoring selected set from full CDS anneal…")
-            cds_by_part, aa_by_part = _cds_maps_from_library(optimized_library)
-            if "oligo_sequence_5to3" in optimized_library.columns:
-                oligos_by_part = {}
-                for lib_row in optimized_library.itertuples(index=False):
-                    pid = str(lib_row.part_id)
-                    if pid in oligos_by_part and getattr(lib_row, "version", 1) != 1:
-                        continue
-                    oligos_by_part[pid] = clean_dna(lib_row.oligo_sequence_5to3)
-            source = "full_anneal_library"
-        elif deep_all and deep_optimize is not None:
+        if deep_all and deep_optimize is not None:
             log(f"[{i}/{n}] Full-anneal scoring overhang set…")
             cds_by_part, aa_by_part = deep_optimize(selection)
-            source = "full_anneal"
         else:
             log(f"[{i}/{n}] Scoring overhang set (greedy CDS + full oligo)…")
             cds_by_part, aa_by_part = greedy_optimize(selection)
-            source = "greedy_cds"
 
-        if oligos_by_part is None:
-            oligos_by_part = build_oligos_from_cds(cds_by_part, flanks)
-
+        oligos_by_part = build_oligos_from_cds(cds_by_part, flanks)
         part_ids = sorted(cds_by_part)
         scores = evaluate_design(
             overhangs=list(selection.values()),
@@ -362,17 +383,27 @@ def rescore_pareto_front_after_anneal(
             flanks_by_part=flanks,
             junction_map=junction_map,
         )
-        rows.append(
-            {
-                "overhangs": overhangs_text,
-                "ligation_fidelity": scores.ligation_fidelity,
-                "codon_optimality": scores.codon_optimality,
-                "synthesis": scores.synthesis,
-                "fidelity_beam": getattr(row, "fidelity_beam", scores.ligation_fidelity),
-                "synthesis_scope": "full_oligo",
-                "score_source": source,
-            }
-        )
+        entry = {
+            "overhangs": overhangs_text,
+            "ligation_fidelity": scores.ligation_fidelity,
+            "codon_optimality": scores.codon_optimality,
+            "synthesis": scores.synthesis,
+            "fidelity_beam": getattr(row, "fidelity_beam", scores.ligation_fidelity),
+            "synthesis_scope": "full_oligo",
+            "score_source": source,
+            "was_annealed_library": bool(
+                annealed_key is not None and overhangs_text == annealed_key
+            ),
+        }
+        if (
+            full_anneal_scores is not None
+            and annealed_key is not None
+            and overhangs_text == annealed_key
+        ):
+            entry["full_anneal_codon"] = full_anneal_scores.codon_optimality
+            entry["full_anneal_synthesis"] = full_anneal_scores.synthesis
+            entry["full_anneal_fidelity"] = full_anneal_scores.ligation_fidelity
+        rows.append(entry)
 
     rescored = pd.DataFrame(rows)
     if output_dir is not None:
@@ -382,6 +413,28 @@ def rescore_pareto_front_after_anneal(
         rescored.to_csv(path, index=False)
         log(f"Wrote post-anneal front → {path}")
     return rescored
+
+
+def select_from_rescored_front(
+    front: pd.DataFrame,
+    *,
+    selection_mode: str = "knee",
+) -> Tuple[pd.Series, Dict[str, str]]:
+    """Pick best overhang set on a uniformly scored front."""
+    if front is None or front.empty:
+        raise ValueError("Empty rescored Pareto front")
+    mode = selection_mode or "knee"
+    if mode == "max_fidelity":
+        chosen = front.sort_values("ligation_fidelity", ascending=False).iloc[0]
+    elif mode == "knee":
+        chosen = knee_point(front)
+    else:
+        match = front[front["overhangs"] == mode]
+        if match.empty:
+            raise ValueError(f"No Pareto point matches selection={mode!r}")
+        chosen = match.iloc[0]
+    selected = parse_overhang_selection(str(chosen["overhangs"]))
+    return chosen, selected
 
 
 def load_and_validate_parts(path: Path | str) -> pd.DataFrame:
@@ -594,7 +647,12 @@ def plot_library_pareto_after_anneal(
     output_dir: Optional[Path] = None,
     log: Callable[[str], None] = print,
 ):
-    """Rescore front with full-oligo synthesis and draw the Pareto plot."""
+    """
+    Uniformly rescore the front, re-select the best point, and plot it.
+
+    The star is the post-anneal knee / max-fidelity choice on comparable scores —
+    not the locked pre-anneal selection.
+    """
     rescored = rescore_pareto_front_after_anneal(
         front,
         parts=parts,
@@ -609,15 +667,57 @@ def plot_library_pareto_after_anneal(
         output_dir=output_dir,
         log=log,
     )
-    save_path = Path(output_dir) / "pareto_front.png" if output_dir else None
-    fig, ax, chosen = plot_pareto_front(
-        rescored,
-        selected_overhangs=selected_overhangs,
-        selection_mode=config.get("overhang_redesign", {}).get("selection", "knee"),
-        save_path=save_path,
-        title="Pareto front · after junction redesign + full CDS anneal",
+    mode = config.get("overhang_redesign", {}).get("selection", "knee")
+    chosen, selected = select_from_rescored_front(rescored, selection_mode=mode)
+
+    if output_dir is not None:
+        output_dir = Path(output_dir)
+        pd.DataFrame([chosen]).to_csv(
+            output_dir / "selected_overhangs_after_anneal.csv", index=False
+        )
+        # Keep a simple dict dump for reload
+        pd.DataFrame(
+            [{"junction": k, "overhang": v} for k, v in sorted(selected.items())]
+        ).to_csv(output_dir / "selected_overhangs_after_anneal_map.csv", index=False)
+
+    pre_key = (
+        ";".join(f"{k}={v}" for k, v in sorted(selected_overhangs.items()))
+        if selected_overhangs
+        else None
     )
-    return {"front": rescored, "figure": fig, "axes": ax, "chosen": chosen}
+    post_key = str(chosen["overhangs"])
+    if pre_key and pre_key != post_key:
+        log(
+            "⚠ Post-anneal selection differs from the overhang set used for "
+            "library anneal.\n"
+            f"  annealed (pre): {pre_key}\n"
+            f"  best now (post): {post_key}\n"
+            "  Re-run Anneal library if you want oligos for the new choice."
+        )
+    else:
+        log(f"Post-anneal selection ({mode}): {post_key}")
+
+    save_path = Path(output_dir) / "pareto_front.png" if output_dir else None
+    scope = "full anneal" if deep_all else "greedy CDS"
+    fig, ax, plotted = plot_pareto_front(
+        rescored,
+        selected_overhangs=selected,
+        selection_mode=mode,
+        save_path=save_path,
+        title=(
+            f"Pareto front · post-anneal ({scope}, full oligo) · "
+            f"selected = {mode}"
+        ),
+    )
+    return {
+        "front": rescored,
+        "figure": fig,
+        "axes": ax,
+        "chosen": chosen,
+        "selected_overhangs": selected,
+        "pre_anneal_selected_overhangs": selected_overhangs,
+        "selection_changed": bool(pre_key and pre_key != post_key),
+    }
 
 
 def run_library_redesign_and_anneal(

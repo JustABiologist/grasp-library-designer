@@ -59,6 +59,7 @@ from .workflows import (
     compile_and_assemble_target,
     write_oligo_fasta,
     plot_library_pareto_after_anneal,
+    select_from_rescored_front,
     run_library_redesign_and_anneal,
 )
 from .codon_tables import load_codon_usage, apply_organism_codon_table, validate_parts_for_organism
@@ -142,6 +143,7 @@ __all__ = [
     "compile_and_assemble_target",
     "write_oligo_fasta",
     "plot_library_pareto_after_anneal",
+    "select_from_rescored_front",
     "run_library_redesign_and_anneal",
     "load_codon_usage",
     "apply_organism_codon_table",

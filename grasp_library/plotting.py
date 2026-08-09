@@ -181,7 +181,7 @@ def plot_pareto_front(
         linewidths=0.6,
         depthshade=False,
         zorder=5,
-        label="selected",
+        label="best (post-anneal)",
     )
 
     ax.set_xlabel("ligation fidelity", labelpad=10, color=INK_SOFT, fontsize=11)
@@ -242,7 +242,7 @@ def plot_pareto_front(
 
     # Score chip for the selected point
     chip = (
-        f"selected   fidelity {cx:.6f}   "
+        f"best (post-anneal)   fidelity {cx:.6f}   "
         f"codon {cy:.3f}   synthesis {cz:.4f}"
     )
     fig.text(
