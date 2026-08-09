@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import copy
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 import pandas as pd
 
 from .dna import apply_overhang_to_mask, clean_mask, clean_dna
+from .import_grasp import compile_target_gap, import_grasp_profile
 from .ligation_fidelity import LigationFidelityCalculator
 from .objectives import evaluate_design, build_oligos_from_cds
+from .optimizer import optimize_library as default_optimize_library
+from .optimizer import optimize_coding_sequence as default_optimize_coding_sequence
+from .optimizer import simulate_assembled_cds
 from .pareto import knee_point, optimize_pareto_overhangs
+from .plotting import plot_pareto_front
 
 
 def flanks_from_parts(parts_df: pd.DataFrame) -> Dict[str, Tuple[str, str]]:
@@ -353,3 +358,252 @@ def rescore_pareto_front_after_anneal(
         rescored.to_csv(path, index=False)
         log(f"Wrote post-anneal front → {path}")
     return rescored
+
+
+def load_and_validate_parts(path: Path | str) -> pd.DataFrame:
+    """Load parts.csv and check mask length vs AA (skips REPLACE placeholders)."""
+    parts = pd.read_csv(path).fillna("")
+    required = {
+        "part_id",
+        "aa_sequence",
+        "coding_mask",
+        "oligo_prefix",
+        "oligo_suffix",
+    }
+    missing = required - set(parts.columns)
+    if missing:
+        raise ValueError(f"parts.csv missing columns: {missing}")
+    if parts["part_id"].duplicated().any():
+        duplicates = parts.loc[parts["part_id"].duplicated(), "part_id"].tolist()
+        raise ValueError(f"Duplicate part_id values: {duplicates}")
+
+    for row in parts.itertuples(index=False):
+        aa = str(row.aa_sequence).upper().replace(" ", "")
+        mask = clean_mask(row.coding_mask)
+        if "REPLACE" in aa or "REPLACE" in mask:
+            continue
+        if len(mask) != 3 * len(aa):
+            raise ValueError(
+                f"{row.part_id}: mask length {len(mask)}, expected {3 * len(aa)}."
+            )
+    return parts
+
+
+def ensure_grasp_imported(
+    *,
+    profile_genbank_dir: Path,
+    input_dir: Path,
+    force: bool = False,
+    log: Callable[[str], None] = print,
+) -> Dict[str, pd.DataFrame]:
+    """Import GenBank profile into input/, or reuse cached CSVs."""
+    input_dir = Path(input_dir)
+    parts_path = input_dir / "parts.csv"
+    cached_ok = (
+        parts_path.exists()
+        and "REPLACE" not in parts_path.read_text()[:500]
+        and (input_dir / "junction_map.csv").exists()
+        and (input_dir / "overhang_candidates.csv").exists()
+    )
+    if cached_ok and not force:
+        log(f"Using cached import under {input_dir}")
+        return {
+            "parts": load_and_validate_parts(parts_path),
+            "parts_full": pd.read_csv(input_dir / "parts_full.csv")
+            if (input_dir / "parts_full.csv").exists()
+            else pd.DataFrame(),
+            "junction_map": pd.read_csv(input_dir / "junction_map.csv"),
+            "overhang_candidates": pd.read_csv(input_dir / "overhang_candidates.csv"),
+            "target_map": pd.read_csv(input_dir / "target_map.csv")
+            if (input_dir / "target_map.csv").exists()
+            else pd.DataFrame(),
+        }
+
+    log(f"Importing GRASP GenBank from {profile_genbank_dir} …")
+    return import_grasp_profile(profile_genbank_dir, input_dir)
+
+
+def export_optimized_library(
+    library: pd.DataFrame,
+    output_dir: Path,
+    *,
+    selected_overhangs: Optional[Mapping[str, str]] = None,
+) -> Dict[str, Path]:
+    """Write CSV / FASTA / Excel for the annealed combinatorial library."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out = library.copy()
+    if selected_overhangs and "selected_overhangs" not in out.columns:
+        tag = ";".join(f"{k}={v}" for k, v in sorted(selected_overhangs.items()))
+        out["selected_overhangs"] = tag
+
+    csv_path = output_dir / "optimized_grasp_oligos.csv"
+    fasta_path = output_dir / "optimized_grasp_oligos.fasta"
+    xlsx_path = output_dir / "optimized_grasp_library.xlsx"
+
+    out.to_csv(csv_path, index=False)
+    with open(fasta_path, "w") as handle:
+        for row in out.itertuples(index=False):
+            handle.write(
+                f">{row.optimized_part_id}"
+                f"|length={row.oligo_length}"
+                f"|qc={row.qc_passed}\n"
+            )
+            handle.write(row.oligo_sequence_5to3 + "\n")
+
+    qc_cols = [
+        c
+        for c in [
+            "optimized_part_id",
+            "translation_verified",
+            "mask_verified",
+            "codon_score",
+            "cds_gc",
+            "cds_repeat_penalty",
+            "oligo_warnings",
+            "oligo_failures",
+            "qc_passed",
+            "selected_overhangs",
+        ]
+        if c in out.columns
+    ]
+    with pd.ExcelWriter(xlsx_path) as writer:
+        out.to_excel(writer, sheet_name="oligos", index=False)
+        if qc_cols:
+            out[qc_cols].to_excel(writer, sheet_name="QC", index=False)
+
+    return {"csv": csv_path, "fasta": fasta_path, "xlsx": xlsx_path}
+
+
+def compile_and_assemble_target(
+    *,
+    target_rna: str,
+    optimized_library: pd.DataFrame,
+    config: Mapping[str, Any],
+    input_dir: Path,
+    output_dir: Path,
+    architecture: str = "9S",
+    nterm_overhang: str = "AGGT",
+) -> Dict[str, Any]:
+    """GAP-compile target RNA against the annealed library and stitch CDS."""
+    input_dir = Path(input_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    plan = compile_target_gap(
+        target_rna,
+        architecture=architecture,
+        nterm_overhang=nterm_overhang,
+    )
+    parts_full = None
+    parts_full_path = input_dir / "parts_full.csv"
+    if parts_full_path.exists():
+        parts_full = pd.read_csv(parts_full_path)
+
+    assembled = simulate_assembled_cds(
+        plan,
+        optimized_library,
+        parts_full=parts_full,
+        genetic_code=int(config.get("genetic_code", 1)),
+        config=config,
+    )
+    rna = str(target_rna).upper().replace("T", "U")
+    plan_path = output_dir / f"assembly_plan_{rna}.csv"
+    fasta_path = output_dir / f"assembled_{rna}.fasta"
+    plan.to_csv(plan_path, index=False)
+    with open(fasta_path, "w") as handle:
+        handle.write(f">GRASP_{rna}\n")
+        handle.write(assembled["assembled_cds"] + "\n")
+
+    return {
+        "assembly_plan": plan,
+        "assembled": assembled,
+        "plan_csv": plan_path,
+        "assembled_fasta": fasta_path,
+        "target_rna": rna,
+    }
+
+
+def plot_library_pareto_after_anneal(
+    *,
+    front: pd.DataFrame,
+    parts: pd.DataFrame,
+    junction_map: pd.DataFrame,
+    codon_data: Dict,
+    config: Dict[str, Any],
+    optimized_library: pd.DataFrame,
+    selected_overhangs: Optional[Dict[str, str]] = None,
+    fidelity: Optional[LigationFidelityCalculator] = None,
+    deep_all: bool = False,
+    output_dir: Optional[Path] = None,
+    log: Callable[[str], None] = print,
+):
+    """Rescore front with full-oligo synthesis and draw the Pareto plot."""
+    rescored = rescore_pareto_front_after_anneal(
+        front,
+        parts=parts,
+        junction_map=junction_map,
+        codon_data=codon_data,
+        config=config,
+        optimize_coding_sequence=default_optimize_coding_sequence,
+        selected_overhangs=selected_overhangs,
+        optimized_library=optimized_library,
+        fidelity=fidelity,
+        deep_all=deep_all,
+        output_dir=output_dir,
+        log=log,
+    )
+    save_path = Path(output_dir) / "pareto_front.png" if output_dir else None
+    fig, ax, chosen = plot_pareto_front(
+        rescored,
+        selected_overhangs=selected_overhangs,
+        selection_mode=config.get("overhang_redesign", {}).get("selection", "knee"),
+        save_path=save_path,
+        title="Pareto front · after junction redesign + full CDS anneal",
+    )
+    return {"front": rescored, "figure": fig, "axes": ax, "chosen": chosen}
+
+
+def run_library_redesign_and_anneal(
+    *,
+    parts: pd.DataFrame,
+    codon_data: Dict,
+    config: Dict[str, Any],
+    input_dir: Path,
+    output_dir: Path,
+    seed: int = 42,
+    fidelity: Optional[LigationFidelityCalculator] = None,
+    log: Callable[[str], None] = print,
+) -> Dict[str, Any]:
+    """Overhang redesign (optional) → full CDS anneal for all modules."""
+    front, selected, updated = run_overhang_redesign(
+        parts=parts,
+        codon_data=codon_data,
+        config=config,
+        optimize_coding_sequence=default_optimize_coding_sequence,
+        input_dir=input_dir,
+        output_dir=output_dir,
+        seed=seed,
+        fidelity=fidelity,
+        log=log,
+    )
+    source = updated if updated is not None and len(updated) else parts
+    library = run_library_optimize(
+        parts=source,
+        codon_data=codon_data,
+        config=config,
+        optimize_library=default_optimize_library,
+        output_dir=output_dir,
+        log=log,
+    )
+    if selected:
+        tag = ";".join(f"{k}={v}" for k, v in sorted(selected.items()))
+        library = library.copy()
+        library["selected_overhangs"] = tag
+        library.to_csv(Path(output_dir) / "optimized_library.csv", index=False)
+    return {
+        "pareto_front": front,
+        "selected_overhangs": selected,
+        "parts": source,
+        "optimized_library": library,
+    }

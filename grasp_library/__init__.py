@@ -37,6 +37,12 @@ from .workflows import (
     run_overhang_redesign,
     run_library_optimize,
     rescore_pareto_front_after_anneal,
+    load_and_validate_parts,
+    ensure_grasp_imported,
+    export_optimized_library,
+    compile_and_assemble_target,
+    plot_library_pareto_after_anneal,
+    run_library_redesign_and_anneal,
 )
 from .codon_tables import load_codon_usage, apply_organism_codon_table, validate_parts_for_organism
 from .codon_validation import analyze_cut_site_aa_risks, validate_codon_table_aas
@@ -83,6 +89,12 @@ __all__ = [
     "run_overhang_redesign",
     "run_library_optimize",
     "rescore_pareto_front_after_anneal",
+    "load_and_validate_parts",
+    "ensure_grasp_imported",
+    "export_optimized_library",
+    "compile_and_assemble_target",
+    "plot_library_pareto_after_anneal",
+    "run_library_redesign_and_anneal",
     "load_codon_usage",
     "apply_organism_codon_table",
     "validate_parts_for_organism",

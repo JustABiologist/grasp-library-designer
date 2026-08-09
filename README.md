@@ -2,26 +2,27 @@
 
 Codon-optimize [GRASP](https://academic.oup.com/nar/article/53/20/gkaf1169/8321212) (Farley et al., *NAR* 2025) binder DNA for Golden Gate assembly.
 
-Two notebooks:
+Two notebooks (both **Colab Forms** UIs):
 
 | Notebook | Purpose |
 |---|---|
-| [`grasp_oneshot_designer.ipynb`](grasp_oneshot_designer.ipynb) | **One target RNA** → binder protein → free GGA cut sites → oligos (**Colab Forms UI**) |
-| [`grasp_library_designer.ipynb`](grasp_library_designer.ipynb) | Redesign / anneal the **42-module combinatorial library**, then compile targets |
+| [`grasp_oneshot_designer.ipynb`](grasp_oneshot_designer.ipynb) | **One target RNA** → binder protein → free GGA cut sites → oligos |
+| [`grasp_library_designer.ipynb`](grasp_library_designer.ipynb) | Redesign / anneal the **42-module combinatorial library**, then GAP-compile a target |
 
-Hard constraints: protein sequence fixed (synonymous codons only); coding Golden Gate overhang bases stay locked in `coding_mask`. Objectives: ligation fidelity (Potapov / GGAssembler), codon optimality, synthesis fitness.
+Hard constraints (library path): protein sequence fixed (synonymous codons only); coding Golden Gate overhang bases stay locked in `coding_mask`. Objectives: ligation fidelity (Potapov / GGAssembler), codon optimality, synthesis fitness.
 
 ---
 
 ## Run in Google Colab (recommended for biologists)
 
-These notebooks are set up for **Colab Forms** (`#@title` / `#@param`). Code stays hidden by default via `{display-mode: "form"}`. You can also use the cell ⋮ menu → **Form → Hide code**.
+Both notebooks use **Colab Forms** (`#@title` / `#@param`). Code stays hidden by default via `{display-mode: "form"}`. You can also use the cell ⋮ menu → **Form → Hide code**.
 
-### 1. Open the notebook in Colab
+### 1. Open a notebook in Colab
 
 From GitHub (private repo): open the `.ipynb` on GitHub → **Open in Colab**, or upload the notebook file to Colab.
 
-Primary entry point: **`grasp_oneshot_designer.ipynb`**.
+- Single binder (no library modules): **`grasp_oneshot_designer.ipynb`**
+- Combinatorial library: **`grasp_library_designer.ipynb`**
 
 ### 2. Install the private package
 
@@ -36,16 +37,24 @@ The cell clones into `/content/grasp-library-designer` and runs `pip install -e 
 
 > Never commit a token into the notebook. Treat Colab “hide code” as presentation only — anyone with the `.ipynb` can reveal source.
 
-### 3. Settings → preview → design → export
+### 3a. One-shot flow
 
 1. **1 · Settings** — organism, vendor, ligation table, target RNA, anneal depth, fragment count (`0` = auto).
 2. **2 · Preview binder protein** — shows PPR code and AA length.
 3. **3 · Design oligos** — full CDS anneal, high-fidelity cut search, oligo table.
 4. **4 · Export Excel** — writes under `grasp_library_project/output/oneshot/{RNA}/` and triggers a Colab download.
 
-### Combinatorial library in Colab
+### 3b. Combinatorial library flow
 
-Open `grasp_library_designer.ipynb`, run **Colab · Install**, then **Colab · Settings (Forms)**. Continue with the import / redesign / anneal cells further down (those still use the shared `CONFIG` / `CODON_DATA`).
+1. **1 · Settings** — organism, vendor, ligation, architecture (`9S`), N-term overhang, redesign mode, anneal depth.
+2. **2 · Import GRASP modules** — parses deposited GenBank (or reuses cached CSVs). Set `FORCE_REIMPORT` to re-parse.
+3. **3 · Redesign overhangs** — Pareto search at fixed cut indices (skip if redesign is off).
+4. **4 · Anneal library** — masked SA for all ~42 modules.
+5. **5 · Pareto plot** — rescores after full-oligo synthesis scoring.
+6. **6 · Export library** — CSV / FASTA / Excel + Colab download.
+7. **7 · Compile target RNA** — GAP assembly plan + stitched CDS for the Settings target.
+
+Outputs land under `grasp_library_project/output/`.
 
 ---
 
@@ -62,8 +71,7 @@ python -m ipykernel install --user --name grasp-library-designer --display-name 
 
 Select the `grasp-library-designer` kernel, open either notebook, run top-to-bottom.
 
-- **One-shot:** Colab Forms cells also work locally (they are plain Python assignments).
-- **Library:** uses an `ipywidgets` control panel; collapse long helper cells with **Notebook: Collapse All Cell Inputs** if you want a cleaner UI.
+Colab Forms cells also work locally (they are plain Python assignments). Collapse inputs with **Notebook: Collapse All Cell Inputs** if you want a cleaner UI.
 
 ---
 
@@ -76,6 +84,8 @@ grasp_library/           # Python package
   gga_split.py           # free GGA cut / overhang search
   optimizer.py           # masked codon + synthesis SA
   import_grasp.py        # GenBank → parts / GAP compile (library path)
+  workflows.py           # library redesign / anneal / export helpers
+  colab_forms.py         # apply Forms settings into CONFIG
   ...
 grasp_library_project/
   input/                 # parts.csv, junction_map, codon tables, …
