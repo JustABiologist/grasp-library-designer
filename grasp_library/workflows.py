@@ -484,6 +484,7 @@ def compile_and_assemble_target(
     output_dir: Path,
     architecture: str = "9S",
     nterm_overhang: str = "AGGT",
+    codon_data: Optional[Dict] = None,
 ) -> Dict[str, Any]:
     """GAP-compile target RNA against the annealed library and stitch CDS."""
     input_dir = Path(input_dir)
@@ -506,6 +507,7 @@ def compile_and_assemble_target(
         parts_full=parts_full,
         genetic_code=int(config.get("genetic_code", 1)),
         config=config,
+        codon_data=codon_data,
     )
     rna = str(target_rna).upper().replace("T", "U")
     plan_path = output_dir / f"assembly_plan_{rna}.csv"

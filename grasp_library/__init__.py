@@ -61,7 +61,12 @@ from .workflows import (
     run_library_redesign_and_anneal,
 )
 from .codon_tables import load_codon_usage, apply_organism_codon_table, validate_parts_for_organism
-from .codon_validation import analyze_cut_site_aa_risks, validate_codon_table_aas
+from .codon_validation import (
+    analyze_cut_site_aa_risks,
+    cds_matches_organism,
+    validate_codon_table_aas,
+    verify_cds_for_organism,
+)
 from .plotting import plot_pareto_front
 from .optimizer import (
     optimize_coding_sequence,
@@ -84,7 +89,7 @@ try:
 
     __version__ = version("grasp-library-designer")
 except PackageNotFoundError:  # pragma: no cover - editable/source tree
-    __version__ = "0.1.0"
+    __version__ = "0.1.1"
 
 __all__ = [
     "LigationFidelityCalculator",
@@ -141,6 +146,8 @@ __all__ = [
     "validate_parts_for_organism",
     "analyze_cut_site_aa_risks",
     "validate_codon_table_aas",
+    "verify_cds_for_organism",
+    "cds_matches_organism",
     "plot_pareto_front",
     "optimize_coding_sequence",
     "optimize_library",

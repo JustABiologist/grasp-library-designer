@@ -103,6 +103,86 @@ def reconcile_codon_table_aas(
     return out
 
 
+def codon_to_aa_map(
+    codon_data: Mapping[str, Sequence[dict]],
+) -> Dict[str, str]:
+    """Map codon → AA from the active organism usage table."""
+    mapping: Dict[str, str] = {}
+    for aa, entries in codon_data.items():
+        aa_key = str(aa).upper()
+        for entry in entries:
+            codon = clean_dna(entry["codon"])
+            mapping[codon] = aa_key
+    return mapping
+
+
+def verify_cds_for_organism(
+    cds: str,
+    aa_sequence: str,
+    *,
+    genetic_code: int,
+    codon_data: Mapping[str, Sequence[dict]],
+) -> Dict[str, Any]:
+    """
+    Standard translation QC against the *selected organism codon table*.
+
+    Passes only if:
+      1. CDS length matches the protein
+      2. NCBI genetic-code translation equals the expected AA
+      3. Every codon is listed in ``codon_data`` for that expected AA
+         (so Euglena designs are checked with Euglena codons, etc.)
+    """
+    from .dna import translate_dna
+
+    cds = clean_dna(cds)
+    aa = str(aa_sequence).upper().replace(" ", "").replace("*", "")
+    result: Dict[str, Any] = {
+        "ok": False,
+        "genetic_code": int(genetic_code),
+        "length_ok": len(cds) == 3 * len(aa),
+        "genetic_code_ok": False,
+        "codon_table_ok": False,
+        "observed_protein": "",
+        "bad_codons": [],
+    }
+    if not result["length_ok"]:
+        return result
+
+    observed = translate_dna(cds, int(genetic_code))
+    result["observed_protein"] = observed
+    result["genetic_code_ok"] = observed == aa
+
+    by_codon = codon_to_aa_map(codon_data)
+    bad: List[str] = []
+    for i, expected_aa in enumerate(aa):
+        codon = cds[3 * i : 3 * i + 3]
+        table_aa = by_codon.get(codon)
+        if table_aa != expected_aa:
+            bad.append(f"{codon}@{i}:{table_aa or '?'}!={expected_aa}")
+    result["bad_codons"] = bad[:12]
+    result["codon_table_ok"] = len(bad) == 0
+    result["ok"] = bool(result["genetic_code_ok"] and result["codon_table_ok"])
+    return result
+
+
+def cds_matches_organism(
+    cds: str,
+    aa_sequence: str,
+    *,
+    genetic_code: int,
+    codon_data: Mapping[str, Sequence[dict]],
+) -> bool:
+    """True when CDS verifies against genetic code + organism codon table."""
+    return bool(
+        verify_cds_for_organism(
+            cds,
+            aa_sequence,
+            genetic_code=genetic_code,
+            codon_data=codon_data,
+        )["ok"]
+    )
+
+
 def locked_codon_spans(coding_mask: str) -> List[tuple[int, str]]:
     """Return (aa_index, codon_mask) for positions with any fixed (non-N) base."""
     mask = clean_mask(coding_mask)

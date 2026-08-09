@@ -34,9 +34,14 @@ def apply_form_settings(
     upload_filename: Optional[str] = None,
     prompt_upload_if_needed: bool = True,
 ) -> Dict[str, Any]:
-    """Apply Colab Form values; return dict with updated config + codon_data."""
+    """Apply Colab Form values; return dict with updated config + codon_data.
+
+    Built-in organism tables own their NCBI genetic code (e.g. Chlamy
+    chloroplast → 11). The form ``genetic_code`` is only used for custom /
+    upload / Kazusa-fetch modes. Translation QC always checks the loaded
+    organism codon table.
+    """
     cfg = dict(config)
-    cfg["genetic_code"] = int(genetic_code)
     cfg["target_rna"] = str(target_rna).strip().upper().replace("T", "U")
     cfg["nterm_overhang"] = nterm_overhang
     cfg["architecture"] = architecture
@@ -62,6 +67,13 @@ def apply_form_settings(
     if kazusa_species_id:
         cfg["kazusa_species_id"] = str(kazusa_species_id).strip()
 
+    entry = SAMPLE_CODON_TABLES.get(organism, {})
+    # Built-in frequency tables: organism genetic code is authoritative.
+    if entry.get("frequencies") is not None:
+        code: Optional[int] = int(entry.get("genetic_code", 1))
+    else:
+        code = int(genetic_code)
+
     resolved_upload = upload_bytes
     resolved_name = upload_filename
     if organism == UPLOAD_OWN_TABLE and resolved_upload is None and prompt_upload_if_needed:
@@ -69,7 +81,7 @@ def apply_form_settings(
             from .codon_upload import prompt_colab_codon_upload
 
             _, uploaded_meta = prompt_colab_codon_upload(
-                codon_path, genetic_code=int(genetic_code)
+                codon_path, genetic_code=int(code)
             )
             resolved_name = uploaded_meta.get("filename")
             # File already written; apply_organism_codon_table reuses the path
@@ -86,7 +98,7 @@ def apply_form_settings(
         table, codon_data, meta, _issues = apply_organism_codon_table(
             organism,
             codon_path,
-            genetic_code=int(genetic_code),
+            genetic_code=code,
             kazusa_species_id=kazusa_species_id or cfg.get("kazusa_species_id"),
             upload_bytes=resolved_upload,
             upload_filename=resolved_name,
@@ -94,9 +106,12 @@ def apply_form_settings(
         cfg["selected_organism_label"] = meta.get("organism", organism)
         if meta.get("species_id"):
             cfg["kazusa_species_id"] = meta["species_id"]
+        code = int(meta.get("genetic_code", code))
     else:
-        table, codon_data = load_codon_usage(codon_path, genetic_code=int(genetic_code))
-        meta = {"organism": organism}
+        table, codon_data = load_codon_usage(codon_path, genetic_code=int(code))
+        meta = {"organism": organism, "genetic_code": int(code)}
+
+    cfg["genetic_code"] = int(code)
 
     return {
         "codon_table": table,

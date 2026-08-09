@@ -11,6 +11,7 @@ from typing import Dict, List, Mapping, Optional, Sequence
 import numpy as np
 import pandas as pd
 
+from .codon_validation import cds_matches_organism, verify_cds_for_organism
 from .dna import (
     clean_dna,
     clean_mask,
@@ -286,8 +287,16 @@ def optimize_coding_sequence(
                 best_sequence = current_sequence
                 best_score = current_score
 
-    if translate_dna(best_sequence, config["genetic_code"]) != aa_sequence:
-        raise AssertionError("Optimization changed the protein sequence.")
+    if not cds_matches_organism(
+        best_sequence,
+        aa_sequence,
+        genetic_code=int(config["genetic_code"]),
+        codon_data=codon_data,
+    ):
+        raise AssertionError(
+            "Optimization failed organism codon-table translation check "
+            f"(genetic code {config['genetic_code']})."
+        )
     if not mask_matches(best_sequence, coding_mask):
         raise AssertionError("Optimized sequence violates the coding mask.")
 
@@ -372,6 +381,12 @@ def optimize_library(
             )
             cds_qc = synthesis_qc(sequence, config)
             oligo_qc = synthesis_qc(full_oligo, config, forbidden_scan=sequence)
+            translation = verify_cds_for_organism(
+                sequence,
+                aa_sequence,
+                genetic_code=int(config["genetic_code"]),
+                codon_data=codon_data,
+            )
 
             result = {
                 "part_id": row["part_id"],
@@ -385,10 +400,10 @@ def optimize_library(
                 "oligo_sequence_5to3": full_oligo,
                 "objective_score": objective,
                 "codon_score": codon_score(sequence, aa_sequence, codon_data),
-                "translation_verified": translate_dna(
-                    sequence, config["genetic_code"]
-                )
-                == aa_sequence,
+                "translation_verified": bool(translation["ok"]),
+                "genetic_code_ok": bool(translation["genetic_code_ok"]),
+                "codon_table_ok": bool(translation["codon_table_ok"]),
+                "genetic_code": int(config["genetic_code"]),
                 "mask_verified": mask_matches(sequence, coding_mask),
                 "cds_gc": cds_qc["gc_fraction"],
                 "cds_longest_homopolymer": cds_qc["longest_homopolymer"],
@@ -397,7 +412,12 @@ def optimize_library(
                 "oligo_gc": oligo_qc["gc_fraction"],
                 "oligo_warnings": oligo_qc["warnings"],
                 "oligo_failures": oligo_qc["failures"],
-                "qc_passed": cds_qc["passed"] and oligo_qc["passed"],
+                "qc_passed": (
+                    cds_qc["passed"]
+                    and oligo_qc["passed"]
+                    and bool(translation["ok"])
+                    and mask_matches(sequence, coding_mask)
+                ),
             }
             part_versions.append(result)
             results.append(result)
@@ -417,6 +437,7 @@ def simulate_assembled_cds(
     *,
     genetic_code: int = 1,
     config: Optional[Mapping] = None,
+    codon_data: Optional[Mapping[str, Sequence[dict]]] = None,
 ) -> Dict:
     """Stitch optimized module CDS with shared 4-nt overhangs deduplicated."""
     lib_cols = ["optimized_part_id", "optimized_cds"]
@@ -499,9 +520,23 @@ def simulate_assembled_cds(
             result.update(qc)
         return result
 
-    observed_protein = translate_dna(assembled_cds, genetic_code)
-    result["observed_protein"] = observed_protein
-    result["translation_verified"] = observed_protein == expected_protein
+    if codon_data is not None:
+        tx = verify_cds_for_organism(
+            assembled_cds,
+            expected_protein,
+            genetic_code=int(genetic_code),
+            codon_data=codon_data,
+        )
+        result["observed_protein"] = tx["observed_protein"]
+        result["translation_verified"] = bool(tx["ok"])
+        result["genetic_code_ok"] = bool(tx["genetic_code_ok"])
+        result["codon_table_ok"] = bool(tx["codon_table_ok"])
+        result["genetic_code"] = int(genetic_code)
+    else:
+        observed_protein = translate_dna(assembled_cds, genetic_code)
+        result["observed_protein"] = observed_protein
+        result["translation_verified"] = observed_protein == expected_protein
+        result["genetic_code"] = int(genetic_code)
     if config is not None:
         result.update(synthesis_qc(assembled_cds, config))
     return result

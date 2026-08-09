@@ -14,7 +14,8 @@ import pandas as pd
 from Bio.Seq import Seq
 
 from .binder import describe_binder, normalize_target_rna
-from .dna import clean_dna, translate_dna
+from .codon_validation import cds_matches_organism, verify_cds_for_organism
+from .dna import clean_dna
 from .gga_split import plan_gga_from_optimized_cds, suggest_fragment_count
 from .ligation_fidelity import LigationFidelityCalculator
 from .optimizer import optimize_coding_sequence, synthesis_qc
@@ -79,9 +80,15 @@ def run_oneshot_design(
         config=config,
     )
     cds = clean_dna(cds)
-    if translate_dna(cds, config.get("genetic_code", 1)) != aa:
-        raise AssertionError("Full-CDS anneal changed the protein sequence")
-    log(f"  Full CDS objective={objective:.3f}")
+    code = int(config.get("genetic_code", 1))
+    if not cds_matches_organism(
+        cds, aa, genetic_code=code, codon_data=codon_data
+    ):
+        raise AssertionError(
+            "Full-CDS anneal failed organism codon-table translation check "
+            f"(genetic code {code})."
+        )
+    log(f"  Full CDS objective={objective:.3f} · verified vs organism table")
 
     lig = config.get("ligation", {})
     calc = fidelity or LigationFidelityCalculator(
@@ -124,6 +131,13 @@ def run_oneshot_design(
         full_oligo = clean_dna(oligo_prefix) + frag_cds + clean_dna(oligo_suffix)
         cds_qc = synthesis_qc(frag_cds, config)
         oligo_qc = synthesis_qc(full_oligo, config, forbidden_scan=frag_cds)
+        # Fragment slices may include a 4-nt sticky overhang; verify protein on
+        # the codon-complete interior (drop leading 4 nt for i>0).
+        frag_aa = aa[aa0:aa1]
+        frag_orf = frag_cds if i == 0 else frag_cds[4:]
+        frag_tx = verify_cds_for_organism(
+            frag_orf, frag_aa, genetic_code=code, codon_data=codon_data
+        )
         rows.append(
             {
                 "fragment_id": prow.fragment_id,
@@ -141,7 +155,13 @@ def run_oneshot_design(
                 "oligo_gc": oligo_qc["gc_fraction"],
                 "oligo_warnings": oligo_qc["warnings"],
                 "oligo_failures": oligo_qc["failures"],
-                "qc_passed": cds_qc["passed"] and oligo_qc["passed"],
+                "translation_verified": bool(frag_tx["ok"]),
+                "codon_table_ok": bool(frag_tx["codon_table_ok"]),
+                "qc_passed": (
+                    cds_qc["passed"]
+                    and oligo_qc["passed"]
+                    and bool(frag_tx["ok"])
+                ),
                 "ligation_fidelity_set": fid,
             }
         )
@@ -170,11 +190,10 @@ def run_oneshot_design(
     for i, row in enumerate(oligos.itertuples(index=False)):
         bits.append(row.fragment_cds if i == 0 else row.fragment_cds[4:])
     assembled = clean_dna("".join(bits))
-    translation_ok = (
-        len(assembled) % 3 == 0
-        and translate_dna(assembled, config.get("genetic_code", 1)) == aa
-        and assembled == cds
+    assembled_tx = verify_cds_for_organism(
+        assembled, aa, genetic_code=code, codon_data=codon_data
     )
+    translation_ok = bool(assembled_tx["ok"]) and assembled == cds
 
     summary = {
         "target_rna": rna,
@@ -183,8 +202,12 @@ def run_oneshot_design(
         "n_fragments": n,
         "ligation_fidelity": fid,
         "translation_verified": translation_ok,
+        "genetic_code": code,
+        "codon_table_ok": bool(assembled_tx["codon_table_ok"]),
         "fragments_qc": bool(oligos["qc_passed"].all()),
         "full_cds_objective": objective,
+        "organism": config.get("selected_organism")
+        or config.get("selected_organism_label"),
     }
     pd.DataFrame([summary]).to_csv(
         output_dir / f"oneshot_{rna}_summary.csv", index=False
@@ -206,12 +229,11 @@ def run_oneshot_design(
         "assembled": {
             "assembled_cds": assembled,
             "expected_protein": aa,
-            "observed_protein": (
-                translate_dna(assembled, config.get("genetic_code", 1))
-                if len(assembled) % 3 == 0
-                else ""
-            ),
+            "observed_protein": assembled_tx.get("observed_protein", ""),
             "translation_verified": translation_ok,
+            "genetic_code_ok": bool(assembled_tx["genetic_code_ok"]),
+            "codon_table_ok": bool(assembled_tx["codon_table_ok"]),
+            "genetic_code": code,
             "ligation_fidelity": fid,
             "binder_info": info,
         },
