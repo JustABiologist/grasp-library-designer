@@ -10,10 +10,26 @@ from .pareto import (
     pareto_front,
 )
 from .sample_codon_tables import (
+    CUSTOM_FILE,
+    FETCH_FROM_KAZUSA,
     SAMPLE_CODON_TABLES,
+    UPLOAD_OWN_TABLE,
+    builtin_sample_names,
     codon_table_dataframe,
+    parse_frequency_block,
     sample_names,
     write_sample_codon_table,
+)
+from .kazusa import (
+    KAZUSA_HOME,
+    fetch_kazusa_codon_table,
+    kazusa_table_url,
+    normalize_kazusa_species_id,
+)
+from .codon_upload import (
+    parse_codon_table_text,
+    prompt_colab_codon_upload,
+    write_uploaded_codon_table,
 )
 from .import_grasp import (
     compile_target_gap,
@@ -56,6 +72,11 @@ from .optimizer import (
 from .oneshot import run_oneshot_design, sanitize_rna_name
 from .binder import rna_to_binder_aa, describe_binder, normalize_target_rna
 from .gga_split import plan_gga_from_optimized_cds, suggest_fragment_count
+from .paths import (
+    bundled_profile_genbank,
+    materialize_project,
+    project_paths,
+)
 
 __all__ = [
     "LigationFidelityCalculator",
@@ -67,9 +88,21 @@ __all__ = [
     "optimize_pareto_overhangs",
     "knee_point",
     "SAMPLE_CODON_TABLES",
+    "CUSTOM_FILE",
+    "FETCH_FROM_KAZUSA",
+    "UPLOAD_OWN_TABLE",
+    "builtin_sample_names",
     "codon_table_dataframe",
+    "parse_frequency_block",
     "sample_names",
     "write_sample_codon_table",
+    "KAZUSA_HOME",
+    "fetch_kazusa_codon_table",
+    "kazusa_table_url",
+    "normalize_kazusa_species_id",
+    "parse_codon_table_text",
+    "prompt_colab_codon_upload",
+    "write_uploaded_codon_table",
     "import_grasp_profile",
     "compile_target_gap",
     "pick_parts_for_target",
@@ -112,4 +145,7 @@ __all__ = [
     "normalize_target_rna",
     "plan_gga_from_optimized_cds",
     "suggest_fragment_count",
+    "bundled_profile_genbank",
+    "materialize_project",
+    "project_paths",
 ]

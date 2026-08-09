@@ -13,7 +13,13 @@ from IPython.display import clear_output, display
 from . import notebook_ui as ui
 from .codon_tables import apply_organism_codon_table, validate_parts_for_organism
 from .codon_validation import format_issues
-from .sample_codon_tables import SAMPLE_CODON_TABLES, sample_names
+from .sample_codon_tables import (
+    FETCH_FROM_KAZUSA,
+    KAZUSA_REMINDER_HTML,
+    SAMPLE_CODON_TABLES,
+    UPLOAD_OWN_TABLE,
+    sample_names,
+)
 from .synthesis_vendors import (
     apply_enzyme_to_config,
     apply_ligation_table_to_config,
@@ -143,12 +149,33 @@ class GraspControlPanel:
             description="Codon table",
             **_DD_WIDE,
         )
+        self.kazusa_id = widgets.Text(
+            value=str(self.config.get("kazusa_species_id", "")),
+            description="Kazusa species",
+            placeholder="e.g. 37762 or paste showcodon.cgi URL",
+            **_DD_WIDE,
+        )
+        self.upload = widgets.FileUpload(
+            accept=".csv,.txt,.html,.htm",
+            multiple=False,
+            description="Upload table",
+            layout=widgets.Layout(width="520px"),
+        )
+        self.kazusa_help = widgets.HTML(
+            value=(
+                "<div style='font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;"
+                "font-size:12px;color:#3d5248;line-height:1.45;margin:2px 0 8px 0;"
+                "padding:8px 10px;background:#fff6e8;border-left:4px solid #e0b872'>"
+                f"{KAZUSA_REMINDER_HTML}</div>"
+            )
+        )
         self.genetic_code = widgets.Dropdown(
             options=[(label, code) for code, label in GENETIC_CODE_OPTIONS],
             value=int(self.config.get("genetic_code", 1)),
             description="Genetic code",
             **_DD_WIDE,
         )
+        self._sync_codon_source_visibility()
         self.vendor = widgets.Dropdown(
             options=vendor_names(),
             value=self.config.get(
@@ -245,6 +272,8 @@ class GraspControlPanel:
     def _wire_events(self) -> None:
         self.apply_btn.on_click(lambda _: self.apply())
         self.organism.observe(self._on_organism_change, names="value")
+        self.kazusa_id.on_submit(lambda _: self.apply())
+        self.upload.observe(self._on_upload_change, names="value")
         # Auto-apply on change — button clicks are unreliable in Cursor
         for w in (
             self.genetic_code,
@@ -259,6 +288,25 @@ class GraspControlPanel:
         ):
             w.observe(self._on_setting_change, names="value")
         self.target_rna.on_submit(lambda _: self.apply())
+
+    def _sync_codon_source_visibility(self) -> None:
+        choice = self.organism.value
+        self.kazusa_id.layout.display = (
+            "" if choice == FETCH_FROM_KAZUSA else "none"
+        )
+        self.upload.layout.display = (
+            "" if choice == UPLOAD_OWN_TABLE else "none"
+        )
+
+    def _on_upload_change(self, change=None) -> None:
+        if not change or change.get("name") != "value":
+            return
+        if not change.get("new"):
+            return
+        if self.organism.value != UPLOAD_OWN_TABLE:
+            self.organism.value = UPLOAD_OWN_TABLE
+            return
+        self.apply()
 
     def widget(self) -> widgets.Widget:
         """Return the full control panel as a VBox."""
@@ -278,7 +326,10 @@ class GraspControlPanel:
             [
                 header,
                 _label("Expression host"),
+                self.kazusa_help,
                 self.organism,
+                self.kazusa_id,
+                self.upload,
                 self.genetic_code,
                 self.architecture,
                 self.nterm,
@@ -338,15 +389,34 @@ class GraspControlPanel:
             return
         if change.get("old") == change.get("new"):
             return
+        self._sync_codon_source_visibility()
         meta = SAMPLE_CODON_TABLES.get(self.organism.value, {})
         code = int(meta.get("genetic_code", 1))
         # Update genetic code without double-firing apply from that observe
         self._applying = True
         try:
-            if code in {c for c, _ in GENETIC_CODE_OPTIONS}:
+            if (
+                self.organism.value not in {FETCH_FROM_KAZUSA, UPLOAD_OWN_TABLE}
+                and code in {c for c, _ in GENETIC_CODE_OPTIONS}
+            ):
                 self.genetic_code.value = code
         finally:
             self._applying = False
+        # Wait for species id / file when those modes are selected
+        if self.organism.value == FETCH_FROM_KAZUSA and not str(
+            self.kazusa_id.value or ""
+        ).strip():
+            self._set_status(
+                "Enter a Kazusa <b>species</b> accession (or paste the "
+                "showcodon.cgi URL), then press Enter / Apply."
+            )
+            return
+        if self.organism.value == UPLOAD_OWN_TABLE and not self.upload.value:
+            self._set_status(
+                "Drag a codon table onto <b>Upload table</b> "
+                "(CSV with <code>codon,frequency</code> or Kazusa text/HTML)."
+            )
+            return
         self.apply()
 
     def _on_setting_change(self, change=None) -> None:
@@ -389,19 +459,43 @@ class GraspControlPanel:
         cfg["parts_file"] = self.input_dir / "parts.csv"
         cfg["target_map_file"] = self.input_dir / "target_map.csv"
         cfg["selected_organism"] = self.organism.value
+        cfg["kazusa_species_id"] = str(self.kazusa_id.value or "").strip()
 
         self.config.clear()
         self.config.update(cfg)
         self.SELECTED_ORGANISM = self.organism.value
+
+        upload_bytes = None
+        upload_filename = None
+        if self.organism.value == UPLOAD_OWN_TABLE and self.upload.value:
+            entry = self._first_upload_entry(self.upload.value)
+            if entry is not None:
+                upload_bytes = entry["content"]
+                upload_filename = entry.get("name")
 
         try:
             table, codon_data, meta, issues = apply_organism_codon_table(
                 self.SELECTED_ORGANISM,
                 Path(self.config["codon_usage_file"]),
                 genetic_code=self.config["genetic_code"],
+                kazusa_species_id=self.config.get("kazusa_species_id"),
+                upload_bytes=upload_bytes,
+                upload_filename=upload_filename,
             )
             self.CODON_TABLE = table
             self.CODON_DATA = codon_data
+            if meta.get("species_id"):
+                self.config["kazusa_species_id"] = meta["species_id"]
+                if not str(self.kazusa_id.value or "").strip():
+                    self.kazusa_id.value = str(meta["species_id"])
+            if (
+                meta.get("genetic_code")
+                and self.organism.value == FETCH_FROM_KAZUSA
+                and int(meta["genetic_code"]) in {c for c, _ in GENETIC_CODE_OPTIONS}
+            ):
+                # _applying is already True inside apply(); observers no-op
+                self.genetic_code.value = int(meta["genetic_code"])
+                self.config["genetic_code"] = int(meta["genetic_code"])
 
             parts_path = self.input_dir / "parts_full.csv"
             if not parts_path.exists():
@@ -479,6 +573,27 @@ class GraspControlPanel:
         if self.on_apply:
             self.on_apply(self.config)
         return self.config
+
+
+    @staticmethod
+    def _first_upload_entry(value) -> Optional[dict]:
+        """Normalize ipywidgets FileUpload payload across v7/v8 shapes."""
+        if not value:
+            return None
+        if isinstance(value, dict):
+            # v7: {filename: {"metadata":…, "content": b"…"}}
+            name, payload = next(iter(value.items()))
+            if isinstance(payload, dict) and "content" in payload:
+                return {
+                    "name": payload.get("metadata", {}).get("name", name),
+                    "content": payload["content"],
+                }
+            return None
+        # v8: tuple/list of {name, type, size, content}
+        first = value[0]
+        if isinstance(first, dict) and "content" in first:
+            return {"name": first.get("name"), "content": first["content"]}
+        return None
 
 
 def wire_reload_button(panel: GraspControlPanel, import_fn: Callable) -> None:

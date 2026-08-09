@@ -143,6 +143,13 @@ def note(text: str) -> None:
     )
 
 
+def kazusa_codon_reminder() -> None:
+    """Short reminder: where to find tables + fetch / upload fallbacks."""
+    from .sample_codon_tables import KAZUSA_REMINDER_HTML
+
+    note(KAZUSA_REMINDER_HTML)
+
+
 def status(text: str) -> None:
     cleaned = (
         text.replace("<br/>", "<br>")

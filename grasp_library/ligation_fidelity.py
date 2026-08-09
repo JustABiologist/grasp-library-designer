@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Iterable, Sequence, Tuple
 
-import sys
-
-_ROOT = Path(__file__).resolve().parents[1]
-_VENDOR = _ROOT / "third_party"
-if str(_VENDOR) not in sys.path:
-    sys.path.insert(0, str(_VENDOR))
+# Prefer the installed package; fall back to the repo's third_party/ tree.
+try:
+    import dawdlib_golden_gate  # type: ignore
+except ImportError:  # pragma: no cover - editable/source checkout
+    _vendor = Path(__file__).resolve().parents[1] / "third_party"
+    if _vendor.is_dir() and str(_vendor) not in sys.path:
+        sys.path.insert(0, str(_vendor))
+    import dawdlib_golden_gate  # type: ignore
 
 from dawdlib_golden_gate import GGData  # noqa: E402
 
@@ -26,12 +29,7 @@ class LigationFidelityCalculator:
 
     DEFAULT_TEMPERATURE = 25
     DEFAULT_HOURS = 18
-    _RESOURCES = (
-        Path(__file__).resolve().parents[1]
-        / "third_party"
-        / "dawdlib_golden_gate"
-        / "resources"
-    )
+    _RESOURCES = Path(dawdlib_golden_gate.__file__).resolve().parent / "resources"
 
     def __init__(
         self,

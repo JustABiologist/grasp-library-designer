@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,6 +8,31 @@ version = "0.1.0"
 description = "Codon-optimize GRASP binder DNA for Golden Gate assembly (library + one-shot)."
 readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "AGPL-3.0-only" }
+authors = [
+  { name = "JustABiologist" },
+]
+keywords = [
+  "GRASP",
+  "Golden Gate",
+  "codon optimization",
+  "synthetic biology",
+  "PPR",
+  "ligation fidelity",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: GNU Affero General Public License v3",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
 dependencies = [
   "pandas>=2.0",
   "numpy>=1.24",
@@ -20,9 +45,30 @@ dependencies = [
 
 [project.optional-dependencies]
 notebook = ["jupyter>=1.0", "ipykernel>=6.0"]
+dev = ["build>=1.0", "twine>=5.0"]
+
+[project.urls]
+Homepage = "https://github.com/JustABiologist/grasp-library-designer"
+Repository = "https://github.com/JustABiologist/grasp-library-designer"
+Issues = "https://github.com/JustABiologist/grasp-library-designer/issues"
+
+[tool.setuptools]
+include-package-data = true
 
 [tool.setuptools.packages.find]
-include = ["grasp_library*"]
+where = [".", "third_party"]
+include = ["grasp_library*", "dawdlib_golden_gate*"]
+exclude = ["grasp_library_project*", "tests*"]
 
 [tool.setuptools.package-data]
-grasp_library = ["py.typed"]
+grasp_library = [
+  "py.typed",
+  "data/profiles/grasp_nar2025/README.md",
+  "data/profiles/grasp_nar2025/genbank/*.gb",
+]
+dawdlib_golden_gate = [
+  "resources/*.csv",
+]
+
+[tool.setuptools.exclude-package-data]
+"*" = [".ipynb_checkpoints/*", "*.checkpoint.*", "__pycache__/*"]

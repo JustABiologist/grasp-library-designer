@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 from Bio.Seq import Seq
 
+from .codon_upload import frequencies_to_dataframe, save_codon_table, write_uploaded_codon_table
 from .codon_validation import (
     ValidationIssue,
     analyze_cut_site_aa_risks,
@@ -16,7 +17,12 @@ from .codon_validation import (
     reconcile_codon_table_aas,
     validate_codon_table_aas,
 )
-from .sample_codon_tables import SAMPLE_CODON_TABLES
+from .sample_codon_tables import (
+    CUSTOM_FILE,
+    FETCH_FROM_KAZUSA,
+    SAMPLE_CODON_TABLES,
+    UPLOAD_OWN_TABLE,
+)
 
 
 def load_codon_usage(
@@ -98,27 +104,108 @@ def load_codon_usage(
     return table, dict(codon_data)
 
 
+def write_frequencies_codon_table(
+    frequencies: Dict[str, float],
+    path,
+    *,
+    genetic_code: int = 1,
+) -> pd.DataFrame:
+    table = frequencies_to_dataframe(frequencies, genetic_code=genetic_code)
+    save_codon_table(table, path)
+    return table
+
+
 def apply_organism_codon_table(
     organism_name: str,
     codon_usage_file: Path,
     *,
     genetic_code: int | None = None,
+    kazusa_species_id: str | None = None,
+    upload_bytes: Optional[Union[bytes, bytearray, memoryview, str]] = None,
+    upload_filename: str | None = None,
 ) -> Tuple[pd.DataFrame, Dict[str, list], dict, List[ValidationIssue]]:
-    """Write sample table (if built-in), load with AA reconciliation, return meta + issues."""
-    meta = SAMPLE_CODON_TABLES[organism_name]
-    code = int(genetic_code if genetic_code is not None else meta.get("genetic_code", 1))
-    issues: List[ValidationIssue] = []
+    """Write sample / fetched / uploaded table, load with AA reconciliation."""
+    if organism_name not in SAMPLE_CODON_TABLES:
+        raise KeyError(
+            f"Unknown codon table {organism_name!r}. "
+            f"Choose one of: {', '.join(SAMPLE_CODON_TABLES)}"
+        )
 
-    if meta["frequencies"] is None:
-        if not Path(codon_usage_file).exists():
-            raise FileNotFoundError(codon_usage_file)
+    base_meta = SAMPLE_CODON_TABLES[organism_name]
+    code = int(
+        genetic_code if genetic_code is not None else base_meta.get("genetic_code", 1)
+    )
+    issues: List[ValidationIssue] = []
+    meta = {**base_meta, "genetic_code": code}
+    path = Path(codon_usage_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    if organism_name == FETCH_FROM_KAZUSA:
+        from .kazusa import fetch_kazusa_codon_table
+
+        if not kazusa_species_id or not str(kazusa_species_id).strip():
+            raise ValueError(
+                "Choose Fetch from Kazusa and enter a species accession "
+                "(e.g. 37762), or paste a Kazusa showcodon.cgi URL."
+            )
+        frequencies, fetched = fetch_kazusa_codon_table(str(kazusa_species_id))
+        # Prefer page genetic code when the caller left the default / None
+        if genetic_code is None and "genetic_code" in fetched:
+            code = int(fetched["genetic_code"])
+        write_frequencies_codon_table(frequencies, path, genetic_code=code)
+        meta = {**meta, **fetched, "genetic_code": code}
+        issues.append(
+            ValidationIssue(
+                "info",
+                "kazusa_fetch",
+                f"Fetched {meta.get('organism')} from Kazusa "
+                f"(species {meta.get('species_id')}).",
+            )
+        )
+    elif organism_name == UPLOAD_OWN_TABLE:
+        if upload_bytes is None:
+            if not path.exists():
+                raise ValueError(
+                    "Choose Upload your own codon table and provide a file "
+                    "(CSV with codon,frequency or a Kazusa frequency block)."
+                )
+            # Re-use previously uploaded CSV already on disk
+            meta = {
+                **meta,
+                "organism": "uploaded file",
+                "source": f"Existing file {path}",
+            }
+        else:
+            _, uploaded_meta = write_uploaded_codon_table(
+                upload_bytes,
+                path,
+                genetic_code=code,
+                filename=upload_filename,
+            )
+            meta = {**meta, **uploaded_meta, "genetic_code": code}
+            issues.append(
+                ValidationIssue(
+                    "info",
+                    "codon_upload",
+                    f"Loaded uploaded codon table"
+                    + (
+                        f" ({upload_filename})"
+                        if upload_filename
+                        else ""
+                    )
+                    + ".",
+                )
+            )
+    elif organism_name == CUSTOM_FILE or base_meta["frequencies"] is None:
+        if not path.exists():
+            raise FileNotFoundError(path)
     else:
         from .sample_codon_tables import write_sample_codon_table
 
-        write_sample_codon_table(organism_name, codon_usage_file)
+        write_sample_codon_table(organism_name, path)
 
     table, codon_data = load_codon_usage(
-        codon_usage_file, genetic_code=code, force_aa_from_genetic_code=True
+        path, genetic_code=code, force_aa_from_genetic_code=True
     )
     issues.extend(validate_codon_table_aas(table, code))
     if meta.get("notes"):

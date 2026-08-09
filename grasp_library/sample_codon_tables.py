@@ -125,11 +125,16 @@ GUG  5.6  GCG  3.3  GAG  5.7  GGG  3.7
 """
 
 
-def _parse_frequency_block(block: str) -> Dict[str, float]:
+def parse_frequency_block(block: str) -> Dict[str, float]:
+    """Parse a Kazusa-style `UUU 24.4 …` frequency-per-thousand block."""
     pairs = re.findall(r"([ACGTU]{3})\s+([0-9]+(?:\.[0-9]+)?)", block.upper())
     if len(pairs) != 64:
         raise ValueError(f"Expected 64 codons, found {len(pairs)}")
     return {codon.replace("U", "T"): float(freq) for codon, freq in pairs}
+
+
+# Back-compat alias
+_parse_frequency_block = parse_frequency_block
 
 
 SAMPLE_CODON_TABLES: Dict[str, dict] = {
@@ -194,11 +199,51 @@ SAMPLE_CODON_TABLES: Dict[str, dict] = {
         "url": "",
         "frequencies": None,
     },
+    "Fetch from Kazusa by species ID": {
+        "organism": "kazusa_fetch",
+        "clade": "Kazusa CUTG",
+        "genetic_code": 1,
+        "source": "Fetched live from https://www.kazusa.or.jp/codon/",
+        "url": "https://www.kazusa.or.jp/codon/",
+        "frequencies": None,
+    },
+    "Upload your own codon table": {
+        "organism": "upload",
+        "clade": "custom",
+        "genetic_code": 1,
+        "source": "User-uploaded codon table (CSV or Kazusa text)",
+        "url": "",
+        "frequencies": None,
+    },
 }
+
+# Special organism keys used by forms / control panel
+FETCH_FROM_KAZUSA = "Fetch from Kazusa by species ID"
+UPLOAD_OWN_TABLE = "Upload your own codon table"
+CUSTOM_FILE = "Custom file (codon_usage.csv)"
+
+KAZUSA_REMINDER_HTML = (
+    "Browse codon tables at "
+    '<a href="https://www.kazusa.or.jp/codon/" target="_blank" rel="noopener">'
+    "Kazusa Codon Usage Database</a> "
+    "(search organism → note the <code>species=</code> accession in the URL). "
+    "If it is not in the built-in list, choose <b>Fetch from Kazusa by species ID</b> "
+    "or <b>Upload your own codon table</b> (CSV with "
+    "<code>codon,frequency</code> or a Kazusa frequency block)."
+)
 
 
 def sample_names() -> list[str]:
     return list(SAMPLE_CODON_TABLES.keys())
+
+
+def builtin_sample_names() -> list[str]:
+    """Built-in tables only (excludes custom / fetch / upload sentinels)."""
+    return [
+        name
+        for name, meta in SAMPLE_CODON_TABLES.items()
+        if meta.get("frequencies") is not None
+    ]
 
 
 def codon_table_dataframe(name: str) -> pd.DataFrame:
