@@ -91,7 +91,7 @@ try:
 
     __version__ = version("grasp-library-designer")
 except PackageNotFoundError:  # pragma: no cover - editable/source tree
-    __version__ = "0.1.4"
+    __version__ = "0.1.5"
 
 __all__ = [
     "LigationFidelityCalculator",
