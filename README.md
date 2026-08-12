@@ -23,7 +23,7 @@ Direct links:
 Each notebook installs with:
 
 ```python
-%pip install -q -U "grasp-library-designer>=0.1.8"
+%pip install -q -U "grasp-library-designer>=0.1.9"
 ```
 
 Bundled GenBank modules, Potapov ligase-only matrices, and Pryor Golden Gate
