@@ -6,23 +6,24 @@ import math
 import pandas as pd
 import pytest
 
-from grasp_library.ligation_fidelity import LigationFidelityCalculator
+from grasp_library.control_panel import build_default_config
+from grasp_library.ligation_fidelity import (
+    LigationFidelityCalculator,
+    fidelity_calculator_for_level,
+)
 from grasp_library.synthesis_vendors import (
+    GRASP_LIGATION_BY_LEVEL,
+    LEVEL0_LIGATION,
+    LEVEL1_LIGATION,
+    LEVEL_MINUS1_LIGATION,
     LIGATION_TABLES,
     apply_ligation_table_to_config,
     ligation_table_names,
+    redesign_ligation_table_names,
 )
 
 
 GRASP_LEVEL0_OVERHANGS = ["CTCA", "ACTC", "AAGA", "GCAC", "TGAA", "CGAG"]
-LEVEL0_PROXY = (
-    "GRASP Level 0 proxy · BbsI-HF + T4 · "
-    "37↔16 °C cycling (Pryor 2020)"
-)
-LEVEL1_PROXY = (
-    "GRASP Level 1 proxy · BsaI-HFv2 + T4 · "
-    "37↔16 °C cycling (Pryor 2020)"
-)
 
 
 def _reverse_complement(sequence: str) -> str:
@@ -84,10 +85,18 @@ def test_three_base_table_is_rejected_for_grasp_scoring() -> None:
         LigationFidelityCalculator(ligation_table="SapI.csv")
 
 
-def test_dashboard_exposes_only_sourced_four_base_protocols() -> None:
+def test_dashboard_exposes_level_matched_four_base_protocols() -> None:
     names = ligation_table_names()
+    redesign = redesign_ligation_table_names()
 
-    assert names[:2] == [LEVEL0_PROXY, LEVEL1_PROXY]
+    assert names[:3] == [
+        LEVEL_MINUS1_LIGATION,
+        LEVEL0_LIGATION,
+        LEVEL1_LIGATION,
+    ]
+    assert redesign[0] == LEVEL0_LIGATION
+    assert LEVEL_MINUS1_LIGATION not in redesign
+    assert LEVEL1_LIGATION not in redesign
     assert all("SapI" not in name for name in names)
     assert all("constant 37" not in name for name in names)
     assert all("constant 42" not in name for name in names)
@@ -95,14 +104,15 @@ def test_dashboard_exposes_only_sourced_four_base_protocols() -> None:
 
 
 @pytest.mark.parametrize(
-    ("name", "table", "restriction_enzyme"),
+    ("name", "table", "restriction_enzyme", "level"),
     [
-        (LEVEL0_PROXY, "BbsI-HF.csv", "BbsI-HF"),
-        (LEVEL1_PROXY, "BsaI-HFv2.csv", "BsaI-HFv2"),
+        (LEVEL_MINUS1_LIGATION, "BsaI-HFv2.csv", "BsaI-HFv2", "level_minus1"),
+        (LEVEL0_LIGATION, "BbsI-HF.csv", "BbsI-HF", "level0"),
+        (LEVEL1_LIGATION, "BsaI-HFv2.csv", "BsaI-HFv2", "level1"),
     ],
 )
 def test_cycling_proxy_metadata_is_not_relabelled_as_static_ligation(
-    name: str, table: str, restriction_enzyme: str
+    name: str, table: str, restriction_enzyme: str, level: str
 ) -> None:
     metadata = LIGATION_TABLES[name]
 
@@ -112,6 +122,7 @@ def test_cycling_proxy_metadata_is_not_relabelled_as_static_ligation(
     assert metadata["assay_kind"] == "golden_gate_cycling"
     assert metadata["overhang_length"] == 4
     assert metadata["restriction_enzyme"] == restriction_enzyme
+    assert metadata["cloning_level"] == level
     assert metadata["cycles"] == 30
     assert metadata["steps"] == [
         {"temperature_c": 37, "minutes": 5},
@@ -127,7 +138,7 @@ def test_cycling_proxy_metadata_is_not_relabelled_as_static_ligation(
 
 
 def test_selected_protocol_metadata_is_preserved_in_config() -> None:
-    updated = apply_ligation_table_to_config({"ligation": {}}, LEVEL0_PROXY)
+    updated = apply_ligation_table_to_config({"ligation": {}}, LEVEL0_LIGATION)
     ligation = updated["ligation"]
 
     assert ligation["temperature"] is None
@@ -135,6 +146,29 @@ def test_selected_protocol_metadata_is_preserved_in_config() -> None:
     assert ligation["ligation_table"] == "BbsI-HF.csv"
     assert ligation["protocol_metadata"]["assay_kind"] == "golden_gate_cycling"
     assert ligation["protocol_metadata"]["proxy_for"].startswith("GRASP Level 0")
+    assert ligation["by_level"]["level_minus1"]["ligation_table"] == "BsaI-HFv2.csv"
+    assert ligation["by_level"]["level0"]["ligation_table"] == "BbsI-HF.csv"
+    assert ligation["by_level"]["level1"]["ligation_table"] == "BsaI-HFv2.csv"
+    assert GRASP_LIGATION_BY_LEVEL["level_minus1"] == LEVEL_MINUS1_LIGATION
+
+
+def test_selecting_bsai_level_does_not_retarget_level0_redesign() -> None:
+    updated = apply_ligation_table_to_config({"ligation": {}}, LEVEL1_LIGATION)
+
+    assert updated["ligation"]["ligation_table"] == "BbsI-HF.csv"
+    assert updated["ligation"]["table_name"] == LEVEL0_LIGATION
+    assert updated["ligation"]["by_level"]["level1"]["ligation_table"] == "BsaI-HFv2.csv"
+
+
+def test_fidelity_calculator_for_level_uses_enzyme_matched_tables(tmp_path) -> None:
+    cfg = build_default_config(tmp_path)
+    level0 = fidelity_calculator_for_level(cfg, "level0")
+    level1 = fidelity_calculator_for_level(cfg, "level1")
+    entry = fidelity_calculator_for_level(cfg, "level_minus1")
+
+    assert str(level0.ligation_table).endswith("BbsI-HF.csv")
+    assert str(level1.ligation_table).endswith("BsaI-HFv2.csv")
+    assert str(entry.ligation_table).endswith("BsaI-HFv2.csv")
 
 
 @pytest.mark.parametrize(

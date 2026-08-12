@@ -12,7 +12,7 @@ not a reimplementation of Twist’s scorer.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Mapping
 
 # ---------------------------------------------------------------------------
 # Profiles
@@ -272,29 +272,52 @@ def _pryor_cycling(
     }
 
 
+# Pryor et al. 2020 measured whole Golden Gate 37↔16 °C cycling matrices.
+# BbsI-HF is the published isoschizomer proxy for Thermo Fisher BpiI (GAAGAC).
+LEVEL_MINUS1_LIGATION = (
+    "GRASP Level −1 proxy · BsaI-HFv2 + T4 · 37↔16 °C cycling (Pryor 2020)"
+)
+LEVEL0_LIGATION = (
+    "GRASP Level 0 proxy · BbsI-HF + T4 · 37↔16 °C cycling (Pryor 2020)"
+)
+LEVEL1_LIGATION = (
+    "GRASP Level 1 proxy · BsaI-HFv2 + T4 · 37↔16 °C cycling (Pryor 2020)"
+)
+
+_BSAI_HFV2 = _pryor_cycling(
+    table="BsaI-HFv2.csv",
+    restriction_enzyme="BsaI-HFv2",
+    supplement_url=(
+        "https://journals.plos.org/plosone/article/file?id="
+        "10.1371/journal.pone.0238592.s001&type=supplementary"
+    ),
+    proxy_for="GRASP BsaI-HFv2 + T4 DNA Ligase (Levels −1 and 1)",
+)
+_BBSI_HF = _pryor_cycling(
+    table="BbsI-HF.csv",
+    restriction_enzyme="BbsI-HF",
+    supplement_url=(
+        "https://journals.plos.org/plosone/article/file?id="
+        "10.1371/journal.pone.0238592.s004&type=supplementary"
+    ),
+    proxy_for="GRASP Level 0 Thermo Fisher BpiI + T4 DNA Ligase",
+)
+
 LIGATION_TABLES: Dict[str, Dict[str, Any]] = {
-    "GRASP Level 0 proxy · BbsI-HF + T4 · 37↔16 °C cycling (Pryor 2020)": (
-        _pryor_cycling(
-            table="BbsI-HF.csv",
-            restriction_enzyme="BbsI-HF",
-            supplement_url=(
-                "https://journals.plos.org/plosone/article/file?id="
-                "10.1371/journal.pone.0238592.s004&type=supplementary"
-            ),
-            proxy_for="GRASP Level 0 Thermo Fisher BpiI + T4 DNA Ligase",
-        )
-    ),
-    "GRASP Level 1 proxy · BsaI-HFv2 + T4 · 37↔16 °C cycling (Pryor 2020)": (
-        _pryor_cycling(
-            table="BsaI-HFv2.csv",
-            restriction_enzyme="BsaI-HFv2",
-            supplement_url=(
-                "https://journals.plos.org/plosone/article/file?id="
-                "10.1371/journal.pone.0238592.s001&type=supplementary"
-            ),
-            proxy_for="GRASP Level 1 BsaI + T4 DNA Ligase",
-        )
-    ),
+    LEVEL_MINUS1_LIGATION: {
+        **deepcopy(_BSAI_HFV2),
+        "proxy_for": "GRASP Level −1 BsaI-HFv2 + T4 DNA Ligase",
+        "cloning_level": "level_minus1",
+    },
+    LEVEL0_LIGATION: {
+        **deepcopy(_BBSI_HF),
+        "cloning_level": "level0",
+    },
+    LEVEL1_LIGATION: {
+        **deepcopy(_BSAI_HFV2),
+        "proxy_for": "GRASP Level 1 BsaI-HFv2 + T4 DNA Ligase",
+        "cloning_level": "level1",
+    },
     "T4 ligase only · 18 h · 25 °C (Potapov 2018; validated cycling proxy)": (
         _potapov_static(25, 18, None)
     ),
@@ -309,6 +332,13 @@ LIGATION_TABLES: Dict[str, Dict[str, Any]] = {
     ),
 }
 
+# Enzyme-matched defaults for each physical GRASP cloning stage.
+GRASP_LIGATION_BY_LEVEL: Dict[str, str] = {
+    "level_minus1": LEVEL_MINUS1_LIGATION,
+    "level0": LEVEL0_LIGATION,
+    "level1": LEVEL1_LIGATION,
+}
+
 
 def vendor_names() -> List[str]:
     return list(SYNTHESIS_VENDORS.keys())
@@ -320,6 +350,50 @@ def enzyme_names() -> List[str]:
 
 def ligation_table_names() -> List[str]:
     return list(LIGATION_TABLES.keys())
+
+
+def redesign_ligation_table_names() -> List[str]:
+    """Matrices offered for Level 0 overhang-redesign scoring.
+
+    Levels −1 and 1 always use the BsaI-HFv2 cycling proxy; they are not
+    selectable as the Level 0 redesign objective.
+    """
+    return [
+        name
+        for name, meta in LIGATION_TABLES.items()
+        if meta.get("cloning_level") in {None, "level0"}
+    ]
+
+
+def _protocol_payload(table_name: str) -> Dict[str, Any]:
+    meta = LIGATION_TABLES[table_name]
+    return {
+        "table_name": table_name,
+        "temperature": meta["temperature"],
+        "hours": meta["hours"],
+        "ligation_table": meta["table"],
+        "protocol_metadata": {
+            key: deepcopy(value)
+            for key, value in meta.items()
+            if key not in {"temperature", "hours", "table"}
+        },
+    }
+
+
+def grasp_ligation_by_level(
+    *,
+    level0_override: str | None = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Return enzyme-matched Pryor proxies for each GRASP cloning stage."""
+    mapping = dict(GRASP_LIGATION_BY_LEVEL)
+    if level0_override is not None:
+        if level0_override not in LIGATION_TABLES:
+            raise ValueError(f"Unknown ligation table: {level0_override!r}")
+        mapping["level0"] = level0_override
+    return {
+        level: _protocol_payload(table_name)
+        for level, table_name in mapping.items()
+    }
 
 
 def apply_vendor_to_config(config: Dict[str, Any], vendor_name: str) -> Dict[str, Any]:
@@ -366,20 +440,72 @@ def apply_enzyme_to_config(config: Dict[str, Any], enzyme_name: str) -> Dict[str
 def apply_ligation_table_to_config(
     config: Dict[str, Any], table_name: str
 ) -> Dict[str, Any]:
+    """Apply a Level 0 redesign matrix and freeze enzyme-matched stage proxies.
+
+    Selecting a Potapov/T4-only table overrides only the Level 0 redesign
+    objective. Level −1 and Level 1 remain BsaI-HFv2 37↔16 °C cycling proxies;
+    Level 0 remains BbsI-HF unless the selected table itself is that proxy or
+    another Level 0 override.
+    """
+    if table_name not in LIGATION_TABLES:
+        raise ValueError(f"Unknown ligation table: {table_name!r}")
     updated = deepcopy(config)
     meta = LIGATION_TABLES[table_name]
+    level0_name = (
+        table_name
+        if meta.get("cloning_level") in {None, "level0"}
+        else LEVEL0_LIGATION
+    )
+    # Selecting the Level −1 / Level 1 BsaI proxy must not silently retarget
+    # Level 0 redesign scoring away from BbsI-HF / BpiI.
+    if meta.get("cloning_level") in {"level_minus1", "level1"}:
+        level0_name = LEVEL0_LIGATION
+        primary_name = LEVEL0_LIGATION
+    else:
+        primary_name = table_name
+
+    by_level = grasp_ligation_by_level(level0_override=level0_name)
+    primary = by_level["level0"] if primary_name == level0_name else _protocol_payload(
+        primary_name
+    )
+    # Primary ligation block stays the Level 0 redesign matrix for backwards
+    # compatibility with workflows that read config["ligation"].
     lig = dict(updated.get("ligation", {}))
-    lig["temperature"] = meta["temperature"]
-    lig["hours"] = meta["hours"]
-    lig["table_name"] = table_name
-    lig["ligation_table"] = meta["table"]
-    lig["protocol_metadata"] = {
-        key: deepcopy(value)
-        for key, value in meta.items()
-        if key not in {"temperature", "hours", "table"}
-    }
+    lig.update(primary)
+    lig["by_level"] = by_level
+    lig["redesign_level"] = "level0"
     updated["ligation"] = lig
     return updated
+
+
+def ligation_protocol_for_level(
+    config: Dict[str, Any], level: str = "level0"
+) -> Dict[str, Any]:
+    """Return the protocol block for one cloning stage."""
+    level = str(level).strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "minus1": "level_minus1",
+        "level_1": "level1",
+        "l0": "level0",
+        "l1": "level1",
+        "lm1": "level_minus1",
+        "entry": "level_minus1",
+    }
+    level = aliases.get(level, level)
+    lig = dict(config.get("ligation", {}))
+    by_level = lig.get("by_level")
+    if not isinstance(by_level, Mapping) or level not in by_level:
+        by_level = grasp_ligation_by_level(
+            level0_override=lig.get("table_name")
+            if lig.get("table_name") in redesign_ligation_table_names()
+            else None
+        )
+    if level not in by_level:
+        raise ValueError(
+            f"Unknown cloning level {level!r}; expected one of "
+            f"{sorted(GRASP_LIGATION_BY_LEVEL)}"
+        )
+    return deepcopy(by_level[level])
 
 
 def twist_length_advice(length_bp: int) -> str:

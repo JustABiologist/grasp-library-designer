@@ -23,7 +23,7 @@ Direct links:
 Each notebook installs with:
 
 ```python
-%pip install -q -U "grasp-library-designer>=0.1.9"
+%pip install -q -U "grasp-library-designer>=0.1.10"
 ```
 
 Bundled GenBank modules, Potapov ligase-only matrices, and Pryor Golden Gate
@@ -75,13 +75,14 @@ fidelity, codon optimality, and synthesis fitness.
 Ligation fidelity is reported per physical six-overhang Level 0 reaction (and
 optionally as an explicitly labelled product across independently transformed
 blocks). The scalar is the orientation-invariant geometric mean of the two
-directional products. The dashboard includes directly measured Pryor et al.
-37↔16 °C Golden Gate cycling matrices as labelled GRASP proxies. Potapov’s
-ligase-only data contain no 16 °C matrix, so the program does not interpolate or
-blend static temperature matrices. These scores are optimization surrogates,
-not cloning guarantees. Synthesis QC distinguishes `PASS`, `WARNING`, and
-`FAIL`; vendor profiles remain transparent heuristics with
-`vendor_acceptance_confirmed=False`.
+directional products. Stage-matched Pryor et al. 37↔16 °C Golden Gate cycling
+matrices are used by default: **BsaI-HFv2** for Levels −1 and 1, and **BbsI-HF**
+(BpiI isoschizomer) for Level 0 redesign scoring. Potapov’s ligase-only data
+remain available as optional Level 0 surrogates; they contain no measured 16 °C
+matrix, so the program does not interpolate or blend static temperature
+matrices. These scores are optimization surrogates, not cloning guarantees.
+Synthesis QC distinguishes `PASS`, `WARNING`, and `FAIL`; vendor profiles remain
+transparent heuristics with `vendor_acceptance_confirmed=False`.
 
 The order file contains double-stranded synthesis fragments with paired,
 inward-facing BsaI sites. The dashboard exposes exactly one physical 5′/3′

@@ -1,6 +1,9 @@
 """GRASP library designer: masked codon optimization with Pareto trade-offs."""
 
-from .ligation_fidelity import LigationFidelityCalculator
+from .ligation_fidelity import (
+    LigationFidelityCalculator,
+    fidelity_calculator_for_level,
+)
 from .assembly_interfaces import (
     build_order_fragment,
     custom_interface_preset,
@@ -52,13 +55,20 @@ from .import_grasp import (
 )
 from .synthesis_vendors import (
     ASSEMBLY_ENZYMES,
+    GRASP_LIGATION_BY_LEVEL,
+    LEVEL0_LIGATION,
+    LEVEL1_LIGATION,
+    LEVEL_MINUS1_LIGATION,
     LIGATION_TABLES,
     SYNTHESIS_VENDORS,
     apply_enzyme_to_config,
     apply_ligation_table_to_config,
     apply_vendor_to_config,
     enzyme_names,
+    grasp_ligation_by_level,
+    ligation_protocol_for_level,
     ligation_table_names,
+    redesign_ligation_table_names,
     twist_length_advice,
     vendor_names,
 )
@@ -105,10 +115,11 @@ try:
 
     __version__ = version("grasp-library-designer")
 except PackageNotFoundError:  # pragma: no cover - editable/source tree
-    __version__ = "0.1.9"
+    __version__ = "0.1.10"
 
 __all__ = [
     "LigationFidelityCalculator",
+    "fidelity_calculator_for_level",
     "build_order_fragment",
     "custom_interface_preset",
     "deposited_grasp_interface_preset",
@@ -148,9 +159,16 @@ __all__ = [
     "SYNTHESIS_VENDORS",
     "ASSEMBLY_ENZYMES",
     "LIGATION_TABLES",
+    "GRASP_LIGATION_BY_LEVEL",
+    "LEVEL_MINUS1_LIGATION",
+    "LEVEL0_LIGATION",
+    "LEVEL1_LIGATION",
     "vendor_names",
     "enzyme_names",
     "ligation_table_names",
+    "redesign_ligation_table_names",
+    "grasp_ligation_by_level",
+    "ligation_protocol_for_level",
     "apply_vendor_to_config",
     "apply_enzyme_to_config",
     "apply_ligation_table_to_config",

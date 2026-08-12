@@ -19,6 +19,32 @@ except ImportError:  # pragma: no cover - editable/source checkout
 from dawdlib_golden_gate import GGData  # noqa: E402
 
 
+def fidelity_calculator_for_level(
+    config: Mapping | None = None,
+    level: str = "level0",
+    *,
+    min_efficiency: float | None = None,
+    min_fidelity: float | None = None,
+) -> "LigationFidelityCalculator":
+    """Build a calculator for one GRASP cloning stage's ligation matrix."""
+    from .synthesis_vendors import ligation_protocol_for_level
+
+    protocol = ligation_protocol_for_level(config or {}, level)
+    kwargs: Dict[str, object] = {
+        "temperature": protocol.get("temperature"),
+        "hours": protocol.get("hours"),
+        "ligation_table": protocol.get("ligation_table"),
+    }
+    if min_efficiency is not None:
+        kwargs["min_efficiency"] = min_efficiency
+    if min_fidelity is not None:
+        kwargs["min_fidelity"] = min_fidelity
+    elif isinstance(protocol.get("protocol_metadata"), Mapping):
+        # Keep calculator defaults unless the caller overrides.
+        pass
+    return LigationFidelityCalculator(**kwargs)  # type: ignore[arg-type]
+
+
 class LigationFidelityCalculator:
     """
     GGAssembler ligation-fidelity engine (Potapov matrices via GGData).

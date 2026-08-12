@@ -16,7 +16,10 @@ from .arelf import (
 )
 from .dna import apply_overhang_to_mask, clean_mask, clean_dna
 from .import_grasp import compile_target_gap, import_grasp_profile
-from .ligation_fidelity import LigationFidelityCalculator
+from .ligation_fidelity import (
+    LigationFidelityCalculator,
+    fidelity_calculator_for_level,
+)
 from .objectives import evaluate_design, build_oligos_from_cds
 from .optimizer import optimize_library as default_optimize_library
 from .optimizer import optimize_coding_sequence as default_optimize_coding_sequence
@@ -186,10 +189,9 @@ def run_overhang_redesign(
         raise ValueError(f"junction_map unknown part_ids: {missing}")
 
     lig = config["ligation"]
-    calc = fidelity or LigationFidelityCalculator(
-        temperature=lig["temperature"],
-        hours=lig["hours"],
-        ligation_table=lig.get("ligation_table"),
+    calc = fidelity or fidelity_calculator_for_level(
+        config,
+        lig.get("redesign_level", "level0"),
         min_efficiency=lig.get("min_efficiency", 0.25),
         min_fidelity=lig.get("min_fidelity", 0.9),
     )
@@ -396,10 +398,9 @@ def rescore_pareto_front_after_anneal(
         )
 
     lig = config.get("ligation", {})
-    calc = fidelity or LigationFidelityCalculator(
-        temperature=lig.get("temperature", 25),
-        hours=lig.get("hours", 18),
-        ligation_table=lig.get("ligation_table"),
+    calc = fidelity or fidelity_calculator_for_level(
+        config,
+        lig.get("redesign_level", "level0"),
         min_efficiency=lig.get("min_efficiency", 0.25),
         min_fidelity=lig.get("min_fidelity", 0.9),
     )

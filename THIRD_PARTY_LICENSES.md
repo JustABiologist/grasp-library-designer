@@ -16,5 +16,12 @@ including the bundled 25 °C and 37 °C, 1 h and 18 h datasets.
 The bundled BsaI-HFv2 and BbsI-HF whole-Golden-Gate 37↔16 °C cycling matrices
 originate from Pryor et al., *PLOS ONE* (2020), DOI
 [`10.1371/journal.pone.0238592`](https://doi.org/10.1371/journal.pone.0238592),
-supplementary datasets S1 and S4. They are exposed as protocol-labelled GRASP
-proxies, not as exact measurements of the GRASP reaction formulation.
+supplementary datasets S1 (BsaI-HFv2) and S4 (BbsI-HF). GRASP uses them as
+enzyme-matched stage proxies:
+
+- Level −1 entry cloning → BsaI-HFv2
+- Level 0 five-part assemblies → BbsI-HF (published isoschizomer of BpiI)
+- Level 1 block joining → BsaI-HFv2
+
+They are labelled proxies, not exact measurements of the GRASP reaction
+formulation (GRASP used 26× 3 min/4 min cycles rather than Pryor's 30× 5 min).

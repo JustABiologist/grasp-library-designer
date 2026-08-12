@@ -16,7 +16,7 @@ from grasp_library.control_panel import GraspControlPanel, build_default_config
 from grasp_library.sample_codon_tables import sample_names
 from grasp_library.synthesis_vendors import (
     enzyme_names,
-    ligation_table_names,
+    redesign_ligation_table_names,
     vendor_names,
 )
 
@@ -28,7 +28,7 @@ def _form_kwargs():
         "target_rna": "UUACACGUG",
         "synthesis_vendor": vendor_names()[0],
         "assembly_enzyme": enzyme_names()[0],
-        "ligation_table": ligation_table_names()[0],
+        "ligation_table": redesign_ligation_table_names()[0],
         "prompt_upload_if_needed": False,
     }
 

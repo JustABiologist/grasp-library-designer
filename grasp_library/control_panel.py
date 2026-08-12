@@ -30,11 +30,12 @@ from .sample_codon_tables import (
     sample_names,
 )
 from .synthesis_vendors import (
+    LEVEL0_LIGATION,
     apply_enzyme_to_config,
     apply_ligation_table_to_config,
     apply_vendor_to_config,
     enzyme_names,
-    ligation_table_names,
+    redesign_ligation_table_names,
     vendor_names,
 )
 
@@ -76,7 +77,7 @@ def build_default_config(input_dir: Path) -> Dict[str, Any]:
         "cds1_to_cds14": 4,
         "cds14_to_cds19": 1,
     }
-    return {
+    cfg: Dict[str, Any] = {
         "project_name": "GRASP_9S_organism_optimized",
         "genetic_code": 1,
         "architecture": "9S",
@@ -160,18 +161,6 @@ def build_default_config(input_dir: Path) -> Dict[str, Any]:
             "final_temperature": 0.02,
             "orthogonal_versions_per_part": 1,
         },
-        "ligation": {
-            # A cycling matrix is not a constant-temperature/time assay.
-            "temperature": None,
-            "hours": None,
-            "min_efficiency": 0.25,
-            "min_fidelity": 0.9,
-            "table_name": (
-                "GRASP Level 0 proxy · BbsI-HF + T4 · "
-                "37↔16 °C cycling (Pryor 2020)"
-            ),
-            "ligation_table": "BbsI-HF.csv",
-        },
         "overhang_redesign": {
             "enabled": False,
             "selection": "knee",
@@ -187,6 +176,10 @@ def build_default_config(input_dir: Path) -> Dict[str, Any]:
         },
         "target_rna": "UUACACGUG",
     }
+    cfg = apply_ligation_table_to_config(cfg, LEVEL0_LIGATION)
+    cfg["ligation"]["min_efficiency"] = 0.25
+    cfg["ligation"]["min_fidelity"] = 0.9
+    return cfg
 
 
 class GraspControlPanel:
@@ -270,13 +263,12 @@ class GraspControlPanel:
             **_DD_WIDE,
         )
         self.ligation = widgets.Dropdown(
-            options=ligation_table_names(),
+            options=redesign_ligation_table_names(),
             value=self.config.get("ligation", {}).get(
                 "table_name",
-                "GRASP Level 0 proxy · BbsI-HF + T4 · "
-                "37↔16 °C cycling (Pryor 2020)",
+                LEVEL0_LIGATION,
             ),
-            description="Ligation table",
+            description="Level 0 fidelity",
             **_DD_WIDE,
         )
         self.architecture = widgets.Dropdown(
@@ -445,6 +437,15 @@ class GraspControlPanel:
                 self.vendor,
                 self.enzyme,
                 self.ligation,
+                widgets.HTML(
+                    value=(
+                        "<div style='font-family:-apple-system,sans-serif;font-size:12px;"
+                        "color:#3d5248;margin:2px 0 8px 0'>"
+                        "Overhang redesign scores Level 0 with <b>BbsI-HF</b> "
+                        "(BpiI isoschizomer, Pryor 37↔16 °C). Levels −1 and 1 "
+                        "always use the <b>BsaI-HFv2</b> cycling proxy.</div>"
+                    )
+                ),
                 _label("Golden Gate overhangs"),
                 widgets.HTML(
                     value=(
@@ -764,21 +765,37 @@ class GraspControlPanel:
             )
             synth = self.config["synthesis"]
             ligation = self.config.get("ligation", {})
+            by_level = ligation.get("by_level", {})
             protocol = ligation.get("protocol_metadata", {})
             grasp_protocol = protocol.get("grasp_reference_protocol", {})
+            level_lines = []
+            for key, label in (
+                ("level_minus1", "Level −1 · BsaI-HFv2"),
+                ("level0", "Level 0 · BbsI-HF / BpiI"),
+                ("level1", "Level 1 · BsaI-HFv2"),
+            ):
+                block = by_level.get(key, {})
+                enzyme = (block.get("protocol_metadata") or {}).get(
+                    "restriction_enzyme", "?"
+                )
+                table = block.get("ligation_table", "?")
+                level_lines.append(f"{label}: <code>{table}</code> ({enzyme})")
+            levels_html = "<br/>".join(level_lines)
             if grasp_protocol:
                 cycle_steps = " / ".join(
                     f"{step['temperature_c']} °C {step['minutes']} min"
                     for step in grasp_protocol.get("steps", [])
                 )
                 protocol_html = (
-                    f"<br/>Ligation data: <b>{ligation.get('table_name')}</b><br/>"
-                    f"GRASP reference cycling: <b>{grasp_protocol.get('cycles')}×</b> "
-                    f"({cycle_steps}); fidelity matrix is a labelled Pryor proxy"
+                    f"<br/>Level 0 redesign matrix: <b>{ligation.get('table_name')}</b>"
+                    f"<br/>{levels_html}"
+                    f"<br/>GRASP reference cycling: <b>{grasp_protocol.get('cycles')}×</b> "
+                    f"({cycle_steps}); Pryor matrices are labelled proxies"
                 )
             else:
                 protocol_html = (
-                    f"<br/>Ligation data: <b>{ligation.get('table_name')}</b>"
+                    f"<br/>Level 0 redesign matrix: <b>{ligation.get('table_name')}</b>"
+                    f"<br/>{levels_html}"
                 )
             body = (
                 f"<div style='font-size:10px;letter-spacing:0.12em;text-transform:uppercase;"
