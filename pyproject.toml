@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "grasp-library-designer"
-version = "0.1.7"
+version = "0.1.8"
 description = "Codon-optimize GRASP binder DNA for Golden Gate assembly (library + one-shot)."
 readme = "README.md"
 requires-python = ">=3.10"
