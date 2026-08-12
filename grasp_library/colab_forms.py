@@ -5,6 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
+from .assembly_interfaces import (
+    CANONICAL_NOTATION,
+    FIVE_PRIME_CODING_SITE,
+    FIVE_PRIME_END,
+    THREE_PRIME_CODING_SITE,
+    THREE_PRIME_END,
+)
 from .codon_tables import apply_organism_codon_table, load_codon_usage
 from .sample_codon_tables import SAMPLE_CODON_TABLES, UPLOAD_OWN_TABLE
 from .synthesis_vendors import (
@@ -52,6 +59,19 @@ def apply_form_settings(
     upload_bytes: Optional[Union[bytes, bytearray, memoryview, str]] = None,
     upload_filename: Optional[str] = None,
     prompt_upload_if_needed: bool = True,
+    n_terminal_5prime_side_overhang: Optional[str] = None,
+    entry_5prime_n_terminal_side_overhang: Optional[str] = None,
+    entry_3prime_c_terminal_side_overhang: Optional[str] = None,
+    level0_acceptor_5prime_n_terminal_side_overhang: Optional[str] = None,
+    level0_acceptor_3prime_c_terminal_side_overhang: Optional[str] = None,
+    cds1_to_cds2_upstream_3prime_c_terminal_side_overhang: Optional[str] = None,
+    cds1_to_cds2_downstream_5prime_n_terminal_side_overhang: Optional[str] = None,
+    cds1_to_cds14_upstream_3prime_c_terminal_side_overhang: Optional[str] = None,
+    cds1_to_cds14_downstream_5prime_n_terminal_side_overhang: Optional[str] = None,
+    cds14_to_cds19_upstream_3prime_c_terminal_side_overhang: Optional[str] = None,
+    cds14_to_cds19_downstream_5prime_n_terminal_side_overhang: Optional[str] = None,
+    level1_5prime_n_terminal_side_overhang: Optional[str] = None,
+    level1_3prime_c_terminal_side_overhang: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Apply Colab Form values; return dict with updated config + codon_data.
 
@@ -60,6 +80,39 @@ def apply_form_settings(
     upload / Kazusa-fetch modes. Translation QC always checks the loaded
     organism codon table.
     """
+    # Prefer the explicit terminal-side API. The shorter historical keywords
+    # remain accepted so existing notebooks/configuration code keeps working.
+    def _new_or_legacy(explicit: Optional[str], legacy: str) -> str:
+        return legacy if explicit is None else explicit
+
+    nterm_overhang = _new_or_legacy(
+        n_terminal_5prime_side_overhang, nterm_overhang
+    )
+    entry_n_overhang = _new_or_legacy(
+        entry_5prime_n_terminal_side_overhang, entry_n_overhang
+    )
+    entry_c_overhang = _new_or_legacy(
+        entry_3prime_c_terminal_side_overhang, entry_c_overhang
+    )
+    level0_acceptor_n_overhang = (
+        _new_or_legacy(
+            level0_acceptor_5prime_n_terminal_side_overhang,
+            level0_acceptor_n_overhang,
+        )
+    )
+    level0_acceptor_c_overhang = (
+        _new_or_legacy(
+            level0_acceptor_3prime_c_terminal_side_overhang,
+            level0_acceptor_c_overhang,
+        )
+    )
+    level1_n_overhang = _new_or_legacy(
+        level1_5prime_n_terminal_side_overhang, level1_n_overhang
+    )
+    level1_c_overhang = _new_or_legacy(
+        level1_3prime_c_terminal_side_overhang, level1_c_overhang
+    )
+
     cfg = dict(config)
     cfg["target_rna"] = str(target_rna).strip().upper().replace("T", "U")
     cfg["nterm_overhang"] = nterm_overhang
@@ -73,13 +126,29 @@ def apply_form_settings(
             raise ValueError(f"{label} must be exactly four DNA bases (ACGT)")
         return cleaned
 
-    def _pair(upstream: str, downstream: str, label: str):
-        up = _overhang(upstream, f"{label} upstream C overhang")
-        down = _overhang(downstream, f"{label} downstream N overhang")
+    def _pair(
+        legacy_upstream: str,
+        legacy_downstream: str,
+        explicit_upstream: Optional[str],
+        explicit_downstream: Optional[str],
+        label: str,
+    ):
+        up = _overhang(
+            legacy_upstream if explicit_upstream is None else explicit_upstream,
+            f"{label} upstream 3′ / C-terminal-side fusion site",
+        )
+        down_source = (
+            legacy_downstream if explicit_downstream is None else explicit_downstream
+        )
+        down = _overhang(
+            down_source,
+            f"{label} downstream 5′ / N-terminal-side fusion site",
+        )
         if reverse_complement(up) != down:
             raise ValueError(
-                f"{label}: directional terminal overhangs must be reverse "
-                f"complements ({up} pairs with {reverse_complement(up)}, not {down})"
+                f"{label}: the upstream 3′ / C-terminal-side and downstream "
+                f"5′ / N-terminal-side overhangs must be reverse complements "
+                f"({up} pairs with {reverse_complement(up)}, not {down})"
             )
         return up, down
 
@@ -89,35 +158,90 @@ def apply_form_settings(
             raise ValueError(f"{label} must be between 0 and 11 within ARELF")
         return result
 
-    cds1_c, cds2_n = _pair(cds1_c_overhang, cds2_n_overhang, "CDS1→CDS2")
+    cds1_c, cds2_n = _pair(
+        cds1_c_overhang,
+        cds2_n_overhang,
+        cds1_to_cds2_upstream_3prime_c_terminal_side_overhang,
+        cds1_to_cds2_downstream_5prime_n_terminal_side_overhang,
+        "CDS1→CDS2",
+    )
     cds1_14_c, cds14_n = _pair(
-        cds1_cds14_c_overhang, cds14_n_overhang, "CDS1→CDS14"
+        cds1_cds14_c_overhang,
+        cds14_n_overhang,
+        cds1_to_cds14_upstream_3prime_c_terminal_side_overhang,
+        cds1_to_cds14_downstream_5prime_n_terminal_side_overhang,
+        "CDS1→CDS14",
     )
     cds14_19_c, cds19_n = _pair(
-        cds14_cds19_c_overhang, cds19_n_overhang, "CDS14→CDS19"
+        cds14_cds19_c_overhang,
+        cds19_n_overhang,
+        cds14_to_cds19_upstream_3prime_c_terminal_side_overhang,
+        cds14_to_cds19_downstream_5prime_n_terminal_side_overhang,
+        "CDS14→CDS19",
     )
     cfg["assembly_interfaces"] = {
+        "terminal_side_convention": (
+            "N-terminal side = 5prime; C-terminal side = 3prime"
+        ),
+        "overhang_sequence_notation": "5prime_to_3prime",
+        "notation": CANONICAL_NOTATION,
+        "coding_strand_direction": "5prime_N_to_3prime_C",
+        # Retained for assembly-interface schema migration compatibility.
         "overhang_notation": "directional_terminal_5p",
         "level_minus1_entry": {
             "profile": "custom",
             "vector_name": str(entry_vector_name).strip(),
             "enzyme": "BsaI",
             "n_terminal_overhang": _overhang(
-                entry_n_overhang, "Entry N overhang"
+                entry_n_overhang, "Entry 5′ / N-terminal-side overhang"
             ),
             "c_terminal_overhang": _overhang(
-                entry_c_overhang, "Entry C overhang"
+                entry_c_overhang, "Entry 3′ / C-terminal-side overhang"
+            ),
+            FIVE_PRIME_END: _overhang(
+                entry_n_overhang, "Entry 5′ / N-terminal-side overhang"
+            ),
+            THREE_PRIME_END: _overhang(
+                entry_c_overhang, "Entry 3′ / C-terminal-side overhang"
+            ),
+            FIVE_PRIME_CODING_SITE: _overhang(
+                entry_n_overhang, "Entry 5′ / N-terminal-side overhang"
+            ),
+            THREE_PRIME_CODING_SITE: reverse_complement(
+                _overhang(
+                    entry_c_overhang, "Entry 3′ / C-terminal-side overhang"
+                )
             ),
         },
         "level0": {
             "acceptor_name": str(level0_acceptor_name).strip(),
             "release_enzyme": "BpiI / BbsI",
             "acceptor_n_terminal_overhang": _overhang(
-                level0_acceptor_n_overhang, "Level 0 acceptor N overhang"
+                level0_acceptor_n_overhang,
+                "Level 0 acceptor 5′ / N-terminal-side overhang",
             ),
             "acceptor_c_terminal_overhang": _overhang(
-                level0_acceptor_c_overhang, "Level 0 acceptor C overhang"
+                level0_acceptor_c_overhang,
+                "Level 0 acceptor 3′ / C-terminal-side overhang",
             ),
+            "acceptor_outer": {
+                FIVE_PRIME_END: _overhang(
+                    level0_acceptor_n_overhang,
+                    "Level 0 acceptor 5′ / N-terminal-side overhang",
+                ),
+                THREE_PRIME_END: _overhang(
+                    level0_acceptor_c_overhang,
+                    "Level 0 acceptor 3′ / C-terminal-side overhang",
+                ),
+                FIVE_PRIME_CODING_SITE: _overhang(
+                    level0_acceptor_n_overhang,
+                    "Level 0 acceptor 5′ / N-terminal-side overhang",
+                ),
+                THREE_PRIME_CODING_SITE: _overhang(
+                    level0_acceptor_c_overhang,
+                    "Level 0 acceptor 3′ / C-terminal-side overhang",
+                ),
+            },
             "block_junctions": {
                 "cds1_to_cds14": {
                     "upstream_c": cds1_14_c,
@@ -142,13 +266,52 @@ def apply_form_settings(
                 },
             },
         },
+        "junctions": {
+            "cds1_to_cds14": {
+                "upstream_three_prime_end_overhang": cds1_14_c,
+                "downstream_five_prime_end_overhang": cds14_n,
+                "assembled_coding_site": cds1_14_c,
+                "assembled_plus_site": cds1_14_c,
+                "arelf_offset_nt": _offset(
+                    cds1_cds14_arelf_offset_nt, "CDS1→CDS14 ARELF offset"
+                ),
+            },
+            "cds14_to_cds19": {
+                "upstream_three_prime_end_overhang": cds14_19_c,
+                "downstream_five_prime_end_overhang": cds19_n,
+                "assembled_coding_site": cds14_19_c,
+                "assembled_plus_site": cds14_19_c,
+                "arelf_offset_nt": _offset(
+                    cds14_cds19_arelf_offset_nt, "CDS14→CDS19 ARELF offset"
+                ),
+            },
+            "terminal_to_cds2": {
+                "upstream_three_prime_end_overhang": cds1_c,
+                "downstream_five_prime_end_overhang": cds2_n,
+                "assembled_coding_site": cds1_c,
+                "assembled_plus_site": cds1_c,
+                "arelf_offset_nt": _offset(
+                    cds1_cds2_arelf_offset_nt, "CDS1→CDS2 ARELF offset"
+                ),
+            },
+        },
         "level1": {
             "acceptor_name": str(level1_acceptor_name).strip(),
             "n_terminal_overhang": _overhang(
-                level1_n_overhang, "Level 1 cassette N overhang"
+                level1_n_overhang,
+                "Level 1 cassette 5′ / N-terminal-side overhang",
             ),
             "c_terminal_overhang": _overhang(
-                level1_c_overhang, "Level 1 cassette C overhang"
+                level1_c_overhang,
+                "Level 1 cassette 3′ / C-terminal-side overhang",
+            ),
+            FIVE_PRIME_END: _overhang(
+                level1_n_overhang,
+                "Level 1 cassette 5′ / N-terminal-side overhang",
+            ),
+            THREE_PRIME_END: _overhang(
+                level1_c_overhang,
+                "Level 1 cassette 3′ / C-terminal-side overhang",
             ),
         },
     }

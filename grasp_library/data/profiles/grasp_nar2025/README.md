@@ -49,7 +49,10 @@ Order each part as a double-stranded synthesis fragment with inward-facing BsaI 
 `TTTGGTCTCAACAT{pAGM1311 insert}TTGTTGAGACCAAA`
 
 This is the deposited-GRASP preset. The dashboard also accepts named custom
-Level −1, Level 0, and Level 1 interfaces. Directional C/N pairs are required to
-be reverse complements. Without a custom acceptor sequence, the software can
+Level −1, Level 0, and Level 1 interfaces. Dashboard labels name physical ends:
+N-terminal side = 5′ end and C-terminal side = 3′ end. Every sticky-end label
+is written 5′→3′, so compatible upstream 3′/C-side and downstream 5′/N-side
+overhangs are reverse complements. Assembled coding-strand sites are stored
+separately where needed. Without a custom acceptor sequence, the software can
 check insert geometry and interface requirements but cannot claim that the
 custom vector backbone was sequence-simulated.

@@ -140,7 +140,13 @@ def plan_fragments_from_cds(
     *,
     ligation_fidelity: float,
 ) -> pd.DataFrame:
-    """Build fragment rows (AA + coding_mask + DNA slice) from a full CDS."""
+    """Build fragment rows (AA + coding_mask + DNA slice) from a full CDS.
+
+    ``oh5``/``oh3`` are four-base sites as written on the assembled coding
+    strand.  They are not independently oriented physical terminal labels;
+    callers that model a particular vector/enzyme geometry must derive and
+    report those terminals separately.
+    """
     cds = clean_dna(cds)
     aa = str(aa_sequence).upper().replace(" ", "")
     if 3 * len(aa) != len(cds):
@@ -197,6 +203,9 @@ def plan_fragments_from_cds(
                 "coding_mask": "".join(mask),
                 "oh5": oh5 or None,
                 "oh3": oh3 or None,
+                "oh5_coding_site_5to3": oh5 or None,
+                "oh3_coding_site_5to3": oh3 or None,
+                "overhang_notation": "assembled_coding_strand_site",
                 "ligation_fidelity_set": ligation_fidelity,
             }
         )

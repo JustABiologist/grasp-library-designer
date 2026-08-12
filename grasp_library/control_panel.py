@@ -11,6 +11,14 @@ import yaml
 from IPython.display import clear_output, display
 
 from . import notebook_ui as ui
+from .assembly_interfaces import (
+    CANONICAL_NOTATION,
+    FIVE_PRIME_CODING_SITE,
+    FIVE_PRIME_END,
+    THREE_PRIME_CODING_SITE,
+    THREE_PRIME_END,
+    reverse_complement as interface_reverse_complement,
+)
 from .codon_tables import apply_organism_codon_table, validate_parts_for_organism
 from .codon_validation import format_issues
 from .sample_codon_tables import (
@@ -64,6 +72,14 @@ def build_default_config(input_dir: Path) -> Dict[str, Any]:
         "architecture": "9S",
         "nterm_overhang": "AGGT",
         "assembly_interfaces": {
+            # Public labels describe the side of the coding sequence. The
+            # legacy discriminator remains for migration compatibility; every
+            # DNA sequence value is written 5'->3'.
+            "terminal_side_convention": "N-terminal side = 5prime; C-terminal side = 3prime",
+            "overhang_sequence_notation": "5prime_to_3prime",
+            "notation": CANONICAL_NOTATION,
+            "coding_strand_direction": "5prime_N_to_3prime_C",
+            # Legacy compatibility tag; new consumers use ``notation``.
             "overhang_notation": "directional_terminal_5p",
             "level_minus1_entry": {
                 "profile": "custom",
@@ -71,12 +87,22 @@ def build_default_config(input_dir: Path) -> Dict[str, Any]:
                 "enzyme": "BsaI",
                 "n_terminal_overhang": "AACA",
                 "c_terminal_overhang": "GGAG",
+                FIVE_PRIME_END: "AACA",
+                THREE_PRIME_END: "GGAG",
+                FIVE_PRIME_CODING_SITE: "AACA",
+                THREE_PRIME_CODING_SITE: "CTCC",
             },
             "level0": {
                 "acceptor_name": "Custom Level 0 acceptor",
                 "release_enzyme": "BpiI / BbsI",
                 "acceptor_n_terminal_overhang": "CTCA",
                 "acceptor_c_terminal_overhang": "CGAG",
+                "acceptor_outer": {
+                    FIVE_PRIME_END: "CTCA",
+                    THREE_PRIME_END: "CGAG",
+                    FIVE_PRIME_CODING_SITE: "CTCA",
+                    THREE_PRIME_CODING_SITE: "CGAG",
+                },
                 "block_junctions": {
                     "cds1_to_cds14": {
                         "upstream_c": "GTGA",
@@ -95,10 +121,35 @@ def build_default_config(input_dir: Path) -> Dict[str, Any]:
                     },
                 },
             },
+            "junctions": {
+                "cds1_to_cds14": {
+                    "upstream_three_prime_end_overhang": "GTGA",
+                    "downstream_five_prime_end_overhang": "TCAC",
+                    "assembled_coding_site": "GTGA",
+                    "assembled_plus_site": "GTGA",
+                    "arelf_offset_nt": 4,
+                },
+                "cds14_to_cds19": {
+                    "upstream_three_prime_end_overhang": "CACG",
+                    "downstream_five_prime_end_overhang": "CGTG",
+                    "assembled_coding_site": "CACG",
+                    "assembled_plus_site": "CACG",
+                    "arelf_offset_nt": 1,
+                },
+                "terminal_to_cds2": {
+                    "upstream_three_prime_end_overhang": "CTTC",
+                    "downstream_five_prime_end_overhang": "GAAG",
+                    "assembled_coding_site": "CTTC",
+                    "assembled_plus_site": "CTTC",
+                    "arelf_offset_nt": 11,
+                },
+            },
             "level1": {
                 "acceptor_name": "Custom Level 1 acceptor",
                 "n_terminal_overhang": "GCCC",
                 "c_terminal_overhang": "GCGA",
+                FIVE_PRIME_END: "GCCC",
+                THREE_PRIME_END: "GCGA",
             },
         },
         "assembly_enzyme": "GRASP default · BsaI + BpiI + BsmBI",
@@ -195,9 +246,20 @@ class GraspControlPanel:
         level0 = assembly.get("level0", {})
         level1 = assembly.get("level1", {})
         block_junctions = level0.get("block_junctions", {})
+        canonical_junctions = assembly.get("junctions", {})
+        acceptor_outer = level0.get("acceptor_outer") or {}
 
         def _junction(name: str, key: str, default):
-            return block_junctions.get(name, {}).get(key, default)
+            canonical_name = "terminal_to_cds2" if name == "cds1_to_cds2" else name
+            canonical_key = {
+                "upstream_c": "upstream_three_prime_end_overhang",
+                "downstream_n": "downstream_five_prime_end_overhang",
+            }.get(key, key)
+            canonical = canonical_junctions.get(canonical_name, {})
+            if canonical_key in canonical:
+                return canonical[canonical_key]
+            legacy = block_junctions.get(name, {}).get(key)
+            return default if legacy is None else legacy
 
         self.organism = widgets.Dropdown(
             options=sample_names(),
@@ -265,13 +327,13 @@ class GraspControlPanel:
             **_DD,
         )
         self.nterm = widgets.Dropdown(
-            options=["AGGT (MoClo N-fusion)", "AATG (Met start)"],
+            options=["AGGT (5′ / N-terminal fusion)", "AATG (5′ / start codon)"],
             value=(
-                "AGGT (MoClo N-fusion)"
+                "AGGT (5′ / N-terminal fusion)"
                 if self.config.get("nterm_overhang", "AGGT") == "AGGT"
-                else "AATG (Met start)"
+                else "AATG (5′ / start codon)"
             ),
-            description="N-term overhang",
+            description="5′ / N-term side",
             **_DD,
         )
         self.redesign = widgets.Dropdown(
@@ -323,13 +385,17 @@ class GraspControlPanel:
             **_DD_WIDE,
         )
         self.entry_n = widgets.Text(
-            value=str(entry.get("n_terminal_overhang", "AACA")),
-            description="Entry N overhang",
+            value=str(
+                entry.get(FIVE_PRIME_END, entry.get("n_terminal_overhang", "AACA"))
+            ),
+            description="Entry 5′ / N side",
             **_DD,
         )
         self.entry_c = widgets.Text(
-            value=str(entry.get("c_terminal_overhang", "GGAG")),
-            description="Entry C overhang",
+            value=str(
+                entry.get(THREE_PRIME_END, entry.get("c_terminal_overhang", "GGAG"))
+            ),
+            description="Entry 3′ / C side",
             **_DD,
         )
         self.level0_acceptor_name = widgets.Text(
@@ -338,23 +404,33 @@ class GraspControlPanel:
             **_DD_WIDE,
         )
         self.level0_acceptor_n = widgets.Text(
-            value=str(level0.get("acceptor_n_terminal_overhang", "CTCA")),
-            description="L0 acceptor N",
+            value=str(
+                acceptor_outer.get(
+                    FIVE_PRIME_END,
+                    level0.get("acceptor_n_terminal_overhang", "CTCA"),
+                )
+            ),
+            description="L0 5′ / N side",
             **_DD,
         )
         self.level0_acceptor_c = widgets.Text(
-            value=str(level0.get("acceptor_c_terminal_overhang", "CGAG")),
-            description="L0 acceptor C",
+            value=str(
+                acceptor_outer.get(
+                    THREE_PRIME_END,
+                    level0.get("acceptor_c_terminal_overhang", "CGAG"),
+                )
+            ),
+            description="L0 3′ / C side",
             **_DD,
         )
         self.cds1_c = widgets.Text(
             value=str(_junction("cds1_to_cds2", "upstream_c", "CTTC")),
-            description="CDS1 C overhang",
+            description="CDS1→2 3′ / C",
             **_DD,
         )
         self.cds2_n = widgets.Text(
             value=str(_junction("cds1_to_cds2", "downstream_n", "GAAG")),
-            description="CDS2 N overhang",
+            description="CDS2←1 5′ / N",
             **_DD,
         )
         self.cds1_c_offset = widgets.IntSlider(
@@ -368,12 +444,12 @@ class GraspControlPanel:
         )
         self.cds1_14_c = widgets.Text(
             value=str(_junction("cds1_to_cds14", "upstream_c", "GTGA")),
-            description="CDS1→14 C",
+            description="CDS1→14 3′ / C",
             **_DD,
         )
         self.cds14_n = widgets.Text(
             value=str(_junction("cds1_to_cds14", "downstream_n", "TCAC")),
-            description="CDS14 N",
+            description="CDS14←1 5′ / N",
             **_DD,
         )
         self.cds1_14_offset = widgets.IntSlider(
@@ -387,12 +463,12 @@ class GraspControlPanel:
         )
         self.cds14_19_c = widgets.Text(
             value=str(_junction("cds14_to_cds19", "upstream_c", "CACG")),
-            description="CDS14→19 C",
+            description="CDS14→19 3′ / C",
             **_DD,
         )
         self.cds19_n = widgets.Text(
             value=str(_junction("cds14_to_cds19", "downstream_n", "CGTG")),
-            description="CDS19 N",
+            description="CDS19←14 5′ / N",
             **_DD,
         )
         self.cds14_19_offset = widgets.IntSlider(
@@ -410,13 +486,21 @@ class GraspControlPanel:
             **_DD_WIDE,
         )
         self.level1_n = widgets.Text(
-            value=str(level1.get("n_terminal_overhang", "GCCC")),
-            description="Cassette N overhang",
+            value=str(
+                level1.get(
+                    FIVE_PRIME_END, level1.get("n_terminal_overhang", "GCCC")
+                )
+            ),
+            description="Cassette 5′ / N side",
             **_DD,
         )
         self.level1_c = widgets.Text(
-            value=str(level1.get("c_terminal_overhang", "GCGA")),
-            description="Cassette C overhang",
+            value=str(
+                level1.get(
+                    THREE_PRIME_END, level1.get("c_terminal_overhang", "GCGA")
+                )
+            ),
+            description="Cassette 3′ / C side",
             **_DD,
         )
         self.apply_btn = widgets.Button(
@@ -498,38 +582,38 @@ class GraspControlPanel:
         level0 = profile["level0"]
         final = profile["final_cassette"]
         outer = level0.get("acceptor_outer") or {
-            "n_overhang_5p": "CTCA",
-            "c_overhang_5p": "CGAG",
+            FIVE_PRIME_END: "CTCA",
+            THREE_PRIME_END: "CGAG",
         }
         self._applying = True
         try:
             self.entry_vector_name.value = entry["vector_id"]
-            self.entry_n.value = entry["n_overhang_5p"]
-            self.entry_c.value = entry["c_overhang_5p"]
+            self.entry_n.value = entry[FIVE_PRIME_END]
+            self.entry_c.value = entry[THREE_PRIME_END]
             self.level0_acceptor_name.value = level0["acceptor_id"]
-            self.level0_acceptor_n.value = outer["n_overhang_5p"]
-            self.level0_acceptor_c.value = outer["c_overhang_5p"]
+            self.level0_acceptor_n.value = outer[FIVE_PRIME_END]
+            self.level0_acceptor_c.value = outer[THREE_PRIME_END]
             self.cds1_c.value = profile["junctions"]["terminal_to_cds2"][
-                "upstream_c_5p"
+                "upstream_three_prime_end_overhang"
             ]
             self.cds2_n.value = profile["junctions"]["terminal_to_cds2"][
-                "downstream_n_5p"
+                "downstream_five_prime_end_overhang"
             ]
             self.cds1_14_c.value = profile["junctions"]["cds1_to_cds14"][
-                "upstream_c_5p"
+                "upstream_three_prime_end_overhang"
             ]
             self.cds14_n.value = profile["junctions"]["cds1_to_cds14"][
-                "downstream_n_5p"
+                "downstream_five_prime_end_overhang"
             ]
             self.cds14_19_c.value = profile["junctions"]["cds14_to_cds19"][
-                "upstream_c_5p"
+                "upstream_three_prime_end_overhang"
             ]
             self.cds19_n.value = profile["junctions"]["cds14_to_cds19"][
-                "downstream_n_5p"
+                "downstream_five_prime_end_overhang"
             ]
             self.level1_acceptor_name.value = final["vector_id"]
-            self.level1_n.value = final["n_overhang_5p"]
-            self.level1_c.value = final["c_overhang_5p"]
+            self.level1_n.value = final[FIVE_PRIME_END]
+            self.level1_c.value = final[THREE_PRIME_END]
         finally:
             self._applying = False
         self.apply()
@@ -564,21 +648,30 @@ class GraspControlPanel:
                 self.vendor,
                 self.enzyme,
                 self.ligation,
-                _label("Oligo → Level -1 entry (directional 5′ overhangs)"),
+                _label(
+                    "Oligo → Level -1 entry "
+                    "(5′ / N-terminal side; 3′ / C-terminal side)"
+                ),
                 self.interface_preset,
                 self.entry_vector_name,
                 widgets.HBox([self.entry_n, self.entry_c]),
                 _label("Level -1 → Level 0 (BpiI release / acceptor)"),
                 self.level0_acceptor_name,
                 widgets.HBox([self.level0_acceptor_n, self.level0_acceptor_c]),
-                _label("Level 0 block junctions (C/N reverse-complement pairs)"),
+                _label(
+                    "Level 0 block junctions "
+                    "(upstream 3′ / C and downstream 5′ / N sides)"
+                ),
                 widgets.HBox([self.cds1_c, self.cds2_n]),
                 self.cds1_c_offset,
                 widgets.HBox([self.cds1_14_c, self.cds14_n]),
                 self.cds1_14_offset,
                 widgets.HBox([self.cds14_19_c, self.cds19_n]),
                 self.cds14_19_offset,
-                _label("Resulting Level 1 cassette"),
+                _label(
+                    "Resulting Level 1 cassette "
+                    "(5′ / N-terminal side; 3′ / C-terminal side)"
+                ),
                 self.level1_acceptor_name,
                 widgets.HBox([self.level1_n, self.level1_c]),
                 _label("Optimizer"),
@@ -691,14 +784,17 @@ class GraspControlPanel:
             return value
 
         def _paired(upstream: widgets.Text, downstream: widgets.Text, label: str):
-            from .dna import reverse_complement
-
-            up = _overhang(upstream, f"{label} upstream C overhang")
-            down = _overhang(downstream, f"{label} downstream N overhang")
-            if reverse_complement(up) != down:
+            up = _overhang(
+                upstream, f"{label} upstream 3′ / C-terminal-side overhang"
+            )
+            down = _overhang(
+                downstream, f"{label} downstream 5′ / N-terminal-side overhang"
+            )
+            if interface_reverse_complement(up) != down:
                 raise ValueError(
-                    f"{label}: directional terminal overhangs must be reverse "
-                    f"complements ({up} pairs with {reverse_complement(up)}, not {down})"
+                    f"{label}: the upstream 3′ / C-terminal-side and downstream "
+                    f"5′ / N-terminal-side overhangs must be reverse complements "
+                    f"({up} pairs with {interface_reverse_complement(up)}, not {down})"
                 )
             return up, down
 
@@ -721,11 +817,17 @@ class GraspControlPanel:
         if selected_profile == "deposited_grasp":
             deposited_values = (
                 str(self.entry_vector_name.value).strip() == "pAGM1311"
-                and _overhang(self.entry_n, "Entry N overhang") == "ACAT"
-                and _overhang(self.entry_c, "Entry C overhang") == "ACAA"
+                and _overhang(self.entry_n, "Entry 5′ / N-terminal side") == "ACAT"
+                and _overhang(self.entry_c, "Entry 3′ / C-terminal side") == "ACAA"
                 and str(self.level0_acceptor_name.value).strip() == "pAGM9121"
-                and _overhang(self.level0_acceptor_n, "Level 0 N") == "CTCA"
-                and _overhang(self.level0_acceptor_c, "Level 0 C") == "CGAG"
+                and _overhang(
+                    self.level0_acceptor_n, "Level 0 5′ / N-terminal side"
+                )
+                == "CTCA"
+                and _overhang(
+                    self.level0_acceptor_c, "Level 0 3′ / C-terminal side"
+                )
+                == "CGAG"
                 and cds1_c == "CTTC"
                 and cds2_n == "GAAG"
                 and cds1_14_c == "GTGA"
@@ -734,8 +836,10 @@ class GraspControlPanel:
                 and cds19_n == "CGTG"
                 and str(self.level1_acceptor_name.value).strip()
                 == "modified_1-1R_pICH47802_lc_p15A_ori_"
-                and _overhang(self.level1_n, "Level 1 N") == "GGAG"
-                and _overhang(self.level1_c, "Level 1 C") == "CGCT"
+                and _overhang(self.level1_n, "Level 1 5′ / N-terminal side")
+                == "GGAG"
+                and _overhang(self.level1_c, "Level 1 3′ / C-terminal side")
+                == "CGCT"
             )
             if not deposited_values:
                 # Never retain deposited-vector completion contexts after the
@@ -744,23 +848,68 @@ class GraspControlPanel:
                 self.interface_preset.value = "custom"
                 print("▶ Edited deposited interfaces; switched vector preset to Custom")
         cfg["assembly_interfaces"] = {
+            "terminal_side_convention": (
+                "N-terminal side = 5prime; C-terminal side = 3prime"
+            ),
+            "overhang_sequence_notation": "5prime_to_3prime",
+            "notation": CANONICAL_NOTATION,
+            "coding_strand_direction": "5prime_N_to_3prime_C",
+            # Kept until consumers of the former dashboard schema migrate.
             "overhang_notation": "directional_terminal_5p",
             "level_minus1_entry": {
                 "profile": selected_profile,
                 "vector_name": str(self.entry_vector_name.value).strip(),
                 "enzyme": "BsaI",
-                "n_terminal_overhang": _overhang(self.entry_n, "Entry N overhang"),
-                "c_terminal_overhang": _overhang(self.entry_c, "Entry C overhang"),
+                "n_terminal_overhang": _overhang(
+                    self.entry_n, "Entry 5′ / N-terminal-side overhang"
+                ),
+                "c_terminal_overhang": _overhang(
+                    self.entry_c, "Entry 3′ / C-terminal-side overhang"
+                ),
+                FIVE_PRIME_END: _overhang(
+                    self.entry_n, "Entry 5′ / N-terminal-side overhang"
+                ),
+                THREE_PRIME_END: _overhang(
+                    self.entry_c, "Entry 3′ / C-terminal-side overhang"
+                ),
+                FIVE_PRIME_CODING_SITE: _overhang(
+                    self.entry_n, "Entry 5′ / N-terminal-side overhang"
+                ),
+                THREE_PRIME_CODING_SITE: interface_reverse_complement(
+                    _overhang(
+                        self.entry_c, "Entry 3′ / C-terminal-side overhang"
+                    )
+                ),
             },
             "level0": {
                 "acceptor_name": str(self.level0_acceptor_name.value).strip(),
                 "release_enzyme": "BpiI / BbsI",
                 "acceptor_n_terminal_overhang": _overhang(
-                    self.level0_acceptor_n, "Level 0 acceptor N overhang"
+                    self.level0_acceptor_n,
+                    "Level 0 acceptor 5′ / N-terminal-side overhang",
                 ),
                 "acceptor_c_terminal_overhang": _overhang(
-                    self.level0_acceptor_c, "Level 0 acceptor C overhang"
+                    self.level0_acceptor_c,
+                    "Level 0 acceptor 3′ / C-terminal-side overhang",
                 ),
+                "acceptor_outer": {
+                    FIVE_PRIME_END: _overhang(
+                        self.level0_acceptor_n,
+                        "Level 0 acceptor 5′ / N-terminal-side overhang",
+                    ),
+                    THREE_PRIME_END: _overhang(
+                        self.level0_acceptor_c,
+                        "Level 0 acceptor 3′ / C-terminal-side overhang",
+                    ),
+                    FIVE_PRIME_CODING_SITE: _overhang(
+                        self.level0_acceptor_n,
+                        "Level 0 acceptor 5′ / N-terminal-side overhang",
+                    ),
+                    THREE_PRIME_CODING_SITE: _overhang(
+                        self.level0_acceptor_c,
+                        "Level 0 acceptor 3′ / C-terminal-side overhang",
+                    ),
+                },
                 "block_junctions": {
                     "cds1_to_cds14": {
                         "upstream_c": cds1_14_c,
@@ -779,13 +928,46 @@ class GraspControlPanel:
                     },
                 },
             },
+            "junctions": {
+                "cds1_to_cds14": {
+                    "upstream_three_prime_end_overhang": cds1_14_c,
+                    "downstream_five_prime_end_overhang": cds14_n,
+                    "assembled_coding_site": cds1_14_c,
+                    "assembled_plus_site": cds1_14_c,
+                    "arelf_offset_nt": int(self.cds1_14_offset.value),
+                },
+                "cds14_to_cds19": {
+                    "upstream_three_prime_end_overhang": cds14_19_c,
+                    "downstream_five_prime_end_overhang": cds19_n,
+                    "assembled_coding_site": cds14_19_c,
+                    "assembled_plus_site": cds14_19_c,
+                    "arelf_offset_nt": int(self.cds14_19_offset.value),
+                },
+                "terminal_to_cds2": {
+                    "upstream_three_prime_end_overhang": cds1_c,
+                    "downstream_five_prime_end_overhang": cds2_n,
+                    "assembled_coding_site": cds1_c,
+                    "assembled_plus_site": cds1_c,
+                    "arelf_offset_nt": int(self.cds1_c_offset.value),
+                },
+            },
             "level1": {
                 "acceptor_name": str(self.level1_acceptor_name.value).strip(),
                 "n_terminal_overhang": _overhang(
-                    self.level1_n, "Level 1 cassette N overhang"
+                    self.level1_n,
+                    "Level 1 cassette 5′ / N-terminal-side overhang",
                 ),
                 "c_terminal_overhang": _overhang(
-                    self.level1_c, "Level 1 cassette C overhang"
+                    self.level1_c,
+                    "Level 1 cassette 3′ / C-terminal-side overhang",
+                ),
+                FIVE_PRIME_END: _overhang(
+                    self.level1_n,
+                    "Level 1 cassette 5′ / N-terminal-side overhang",
+                ),
+                THREE_PRIME_END: _overhang(
+                    self.level1_c,
+                    "Level 1 cassette 3′ / C-terminal-side overhang",
                 ),
             },
         }
@@ -892,7 +1074,7 @@ class GraspControlPanel:
                 f"genetic code <b>{self.config['genetic_code']}</b>{link}<br/>"
                 f"Codons: <b>{len(table)}</b> sense · AA labels forced from genetic code<br/>"
                 f"Architecture: <b>{self.config['architecture']}</b> · "
-                f"N-term: <b>{self.config['nterm_overhang']}</b> · "
+                f"5′ / N-terminal side: <b>{self.config['nterm_overhang']}</b> · "
                 f"Target: <code>{self.config['target_rna']}</code><br/>"
                 f"Synthesis: <b>{self.config['synthesis_vendor']}</b> · "
                 f"GC {synth['global_gc_min']*100:.0f}–{synth['global_gc_max']*100:.0f}% · "

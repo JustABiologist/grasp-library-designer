@@ -47,5 +47,8 @@ Order each part as a double-stranded synthesis fragment with inward-facing BsaI 
 BsaI clones into pAGM1311 in the deposited preset. The retained BpiI sites then
 release the module for five-part assembly into pAGM9121 with external overhangs
 `CTCA` and `CGAG`. Dashboard-defined custom interfaces are also supported and
-are labelled as requirements-checked, not vector-sequence-verified, unless the
-matching acceptor sequence is supplied.
+are labelled by physical terminal side: 5′/N-terminal side and 3′/C-terminal
+side, with every sticky-end label written 5′→3′. Compatible terminal ends
+therefore use reverse-complement labels; retained coding-strand sites are
+tracked separately. They are requirements-checked, not vector-sequence-verified,
+unless the matching acceptor sequence is supplied.

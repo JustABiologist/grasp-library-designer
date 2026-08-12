@@ -13,6 +13,10 @@ import pandas as pd
 from .binder import describe_binder, normalize_target_rna
 from .arelf import materialize_arelf_parts
 from .assembly_interfaces import (
+    FIVE_PRIME_CODING_SITE,
+    FIVE_PRIME_END,
+    THREE_PRIME_CODING_SITE,
+    THREE_PRIME_END,
     extract_order_payload,
     resolve_assembly_interfaces,
     reverse_complement,
@@ -42,8 +46,10 @@ def validate_order_fragment_in_silico(
     sequence = clean_dna(sequence)
     payload = extract_order_payload(sequence, interfaces)
     entry = interfaces["level_minus1_entry"]
-    entry_insert = entry["n_overhang_5p"] + payload + reverse_complement(
-        entry["c_overhang_5p"]
+    entry_insert = (
+        entry[FIVE_PRIME_CODING_SITE]
+        + payload
+        + entry[THREE_PRIME_CODING_SITE]
     )
     context_5 = entry.get("completion_context_5p")
     context_3 = entry.get("completion_context_3p")
@@ -63,9 +69,13 @@ def validate_order_fragment_in_silico(
         raise ValueError("configured entry-vector context does not complete release sites")
     return {
         "assembly_interface_profile": interfaces["profile_name"],
+        "terminal_site_notation": interfaces["notation"],
+        "coding_strand_direction": interfaces["coding_strand_direction"],
         "entry_insert_5to3": entry_insert,
-        "entry_insertion_overhang_5": entry_insert[:4],
-        "entry_insertion_overhang_3": entry_insert[-4:],
+        "entry_five_prime_end_overhang": entry[FIVE_PRIME_END],
+        "entry_three_prime_end_overhang": entry[THREE_PRIME_END],
+        "entry_five_prime_assembled_coding_site": entry_insert[:4],
+        "entry_three_prime_assembled_coding_site": entry_insert[-4:],
         "cloned_entry_context_5to3": cloned_context,
         "module_release_payload_5to3": payload,
         "module_release_oh5": payload[:4],
@@ -89,6 +99,12 @@ def validate_pagm1311_order_fragment(sequence: str) -> Dict[str, Any]:
         sequence, resolve_assembly_interfaces(preset="deposited_grasp")
     )
     # Preserve historical sequence-field spellings for callers, not claims.
+    result["entry_insertion_overhang_5"] = result[
+        "entry_five_prime_assembled_coding_site"
+    ]
+    result["entry_insertion_overhang_3"] = result[
+        "entry_three_prime_assembled_coding_site"
+    ]
     result["cloned_pagm1311_context_5to3"] = result["cloned_entry_context_5to3"]
     result["bpii_release_payload_5to3"] = result["module_release_payload_5to3"]
     result["bpii_release_oh5"] = result["module_release_oh5"]
@@ -116,9 +132,9 @@ def _validate_level0_groups(
         if len(payloads) != 5:
             raise AssertionError(f"{group}: expected five Level -1 modules")
         outer = interfaces["level0"].get("acceptor_outer")
-        if outer is not None and payloads[0][:4] != outer["n_overhang_5p"]:
+        if outer is not None and payloads[0][:4] != outer[FIVE_PRIME_CODING_SITE]:
             raise AssertionError(f"{group}: first module misses the Level 0 outer interface")
-        if outer is not None and payloads[-1][-4:] != outer["c_overhang_5p"]:
+        if outer is not None and payloads[-1][-4:] != outer[THREE_PRIME_CODING_SITE]:
             raise AssertionError(f"{group}: last module misses the Level 0 outer interface")
         for left, right in zip(payloads, payloads[1:]):
             if left[-4:] != right[:4]:
@@ -181,15 +197,17 @@ def _validate_ppr_block_chain(
         )
     blocks = [str(by_group.loc[group, "ppr_block_5to3"]) for group in group_order]
     ppr_outer = interfaces_profile["level0"]["ppr_outer"]
-    if blocks[0][:4] != ppr_outer["n_overhang_5p"]:
+    if blocks[0][:4] != ppr_outer[FIVE_PRIME_CODING_SITE]:
         raise AssertionError("first PPR block misses the configured PPR N interface")
-    if blocks[-1][-4:] != ppr_outer["c_overhang_5p"]:
+    if blocks[-1][-4:] != ppr_outer[THREE_PRIME_CODING_SITE]:
         raise AssertionError("last PPR block misses the configured PPR C interface")
     for left, right, join_name in zip(blocks, blocks[1:], layout["joins"]):
         junction = interfaces_profile["junctions"][join_name]
-        if reverse_complement(junction["upstream_c_5p"]) != junction["downstream_n_5p"]:
-            raise AssertionError(f"{join_name}: directional terminal pair is incompatible")
-        expected = junction["assembled_plus_site"]
+        upstream = junction["upstream_three_prime_end_overhang"]
+        downstream = junction["downstream_five_prime_end_overhang"]
+        if reverse_complement(upstream) != downstream:
+            raise AssertionError(f"{join_name}: physical sticky ends are incompatible")
+        expected = junction["assembled_coding_site"]
         if left[-4:] != expected or right[:4] != expected:
             raise AssertionError(
                 f"{join_name}: PPR block junction mismatch "
@@ -222,8 +240,8 @@ def _validate_ppr_block_chain(
         "binding_tract_cds_5to3": reconstructed,
         "ppr_block_chain_in_silico_validated": True,
         "final_cassette_vector_id": final["vector_id"],
-        "final_cassette_n_terminal_overhang_5p": final["n_overhang_5p"],
-        "final_cassette_c_terminal_overhang_5p": final["c_overhang_5p"],
+        "final_cassette_five_prime_end_overhang": final[FIVE_PRIME_END],
+        "final_cassette_three_prime_end_overhang": final[THREE_PRIME_END],
         "final_cassette_requirements_checked": True,
         "final_cassette_vector_sequence_provided": bool(
             interfaces_profile["final_cassette"].get("vector_sequence")
@@ -416,28 +434,36 @@ def run_oneshot_design(
         "n_unique_order_fragments": len(orderable),
         "n_level0_assemblies": len(level0),
         "assembly_interface_profile": interfaces["profile_name"],
+        "terminal_site_notation": interfaces["notation"],
+        "coding_strand_direction": interfaces["coding_strand_direction"],
         "entry_vector": interfaces["level_minus1_entry"]["vector_id"],
-        "entry_n_terminal_overhang_5p": interfaces["level_minus1_entry"][
-            "n_overhang_5p"
+        "entry_five_prime_end_overhang": interfaces["level_minus1_entry"][
+            FIVE_PRIME_END
         ],
-        "entry_c_terminal_overhang_5p": interfaces["level_minus1_entry"][
-            "c_overhang_5p"
+        "entry_three_prime_end_overhang": interfaces["level_minus1_entry"][
+            THREE_PRIME_END
+        ],
+        "entry_five_prime_assembled_coding_site": interfaces["level_minus1_entry"][
+            FIVE_PRIME_CODING_SITE
+        ],
+        "entry_three_prime_assembled_coding_site": interfaces["level_minus1_entry"][
+            THREE_PRIME_CODING_SITE
         ],
         "entry_cloning_enzyme": ENTRY_CLONING_ENZYME,
         "module_release_enzyme": MODULE_RELEASE_ENZYME,
         "level0_acceptor": interfaces["level0"]["acceptor_id"],
-        "ppr_n_terminal_overhang_5p": interfaces["level0"]["ppr_outer"][
-            "n_overhang_5p"
+        "ppr_five_prime_end_overhang": interfaces["level0"]["ppr_outer"][
+            FIVE_PRIME_END
         ],
-        "ppr_c_terminal_overhang_5p": interfaces["level0"]["ppr_outer"][
-            "c_overhang_5p"
+        "ppr_three_prime_end_overhang": interfaces["level0"]["ppr_outer"][
+            THREE_PRIME_END
         ],
         "final_cassette_vector": interfaces["final_cassette"]["vector_id"],
-        "final_cassette_n_terminal_overhang_5p": interfaces["final_cassette"][
-            "n_overhang_5p"
+        "final_cassette_five_prime_end_overhang": interfaces["final_cassette"][
+            FIVE_PRIME_END
         ],
-        "final_cassette_c_terminal_overhang_5p": interfaces["final_cassette"][
-            "c_overhang_5p"
+        "final_cassette_three_prime_end_overhang": interfaces["final_cassette"][
+            THREE_PRIME_END
         ],
         "translation_verified": bool(assembled["translation_verified"]),
         "order_fragment_requirements_checked": bool(

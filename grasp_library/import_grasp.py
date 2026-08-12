@@ -122,7 +122,10 @@ JUNCTION_ORDER_9S = [
     ("J_AAGA", "AAGA"),  # B 3′ ↔ C 5′
     ("J_GCAC", "GCAC"),  # C 3′ ↔ D 5′
     ("J_TGAA", "TGAA"),  # D 3′ ↔ 1E/2E 5′
-    ("J_CTTC", "CTTC"),  # 1E 3′ ↔ 2A 5′
+    # ``CTTC`` is the sequence retained on the assembled coding strand.  In
+    # directional terminal-5′ notation the physical pair is 1E C = CTTC and
+    # 2A N = GAAG.  Keep those concepts separate in the imported metadata.
+    ("J_CTTC", "CTTC"),  # 1E coding-site 3′ ↔ 2A coding-site 5′
     ("J_Cterm", "TTCG"),  # 2E 3′
 ]
 
@@ -158,6 +161,51 @@ CODE_TO_SUFFIX = {
 }
 
 STANDARD_CODONS = CodonTable.unambiguous_dna_by_id[1]
+
+
+_INTERBLOCK_TERMINALS = {
+    "1E": (None, "terminal_to_cds2", "upstream_c_5p"),
+    "2A": ("terminal_to_cds2", None, "downstream_n_5p"),
+    "14E": (None, "cds1_to_cds14", "upstream_c_5p"),
+    "14A": ("cds1_to_cds14", None, "downstream_n_5p"),
+    "19E": (None, "cds14_to_cds19", "upstream_c_5p"),
+    "19A": ("cds14_to_cds19", None, "downstream_n_5p"),
+}
+
+
+def _part_terminal_overhangs(
+    part_id: str,
+    oh5_coding_site: str,
+    oh3_coding_site: str,
+) -> Tuple[str, str]:
+    """Return physical N/C terminal labels without changing coding sites.
+
+    Deposited GenBank annotations are top/coding-strand sequence windows.  At
+    an inter-block junction both adjacent windows therefore contain the same
+    four bases (for example CTTC), even though the two sticky termini are
+    conventionally written 5′-to-3′ as a reverse-complement pair (CTTC/GAAG).
+    """
+    role = str(part_id).split("_", 1)[0]
+    n_terminal = oh5_coding_site
+    c_terminal = oh3_coding_site
+    mapping = _INTERBLOCK_TERMINALS.get(role)
+    if mapping is None:
+        return n_terminal, c_terminal
+
+    n_junction, c_junction, directional_key = mapping
+    junction_name = n_junction or c_junction
+    junction = _DEPOSITED_INTERFACES["junctions"][junction_name]
+    canonical_key = (
+        "downstream_five_prime_end_overhang"
+        if n_junction is not None
+        else "upstream_three_prime_end_overhang"
+    )
+    terminal = junction.get(canonical_key, junction[directional_key])
+    if n_junction is not None:
+        n_terminal = terminal
+    else:
+        c_terminal = terminal
+    return n_terminal, c_terminal
 
 
 def _feature_label(feature) -> str:
@@ -294,6 +342,12 @@ def load_grasp_records(genbank_paths: Sequence[Path]) -> List[dict]:
             window = _choose_coding_window(parsed)
             prefix, suffix = _flanks(parsed, window["start"], window["end"])
             dna = window["dna"]
+            part_id = _part_id_from_name(parsed["name"])
+            n_terminal, c_terminal = _part_terminal_overhangs(
+                part_id,
+                window["oh5"],
+                window["oh3"],
+            )
             mask_chars = ["N"] * len(dna)
             for pos, oh in (
                 (window["oh5_pos"], window["oh5"]),
@@ -303,7 +357,7 @@ def load_grasp_records(genbank_paths: Sequence[Path]) -> List[dict]:
                     mask_chars[pos + i] = base
             records.append(
                 {
-                    "part_id": _part_id_from_name(parsed["name"]),
+                    "part_id": part_id,
                     "source_name": parsed["name"],
                     "aa_sequence": window["aa"],
                     "coding_dna": dna,
@@ -312,6 +366,11 @@ def load_grasp_records(genbank_paths: Sequence[Path]) -> List[dict]:
                     "oligo_suffix": suffix,
                     "oh5": window["oh5"],
                     "oh3": window["oh3"],
+                    "oh5_coding_site_5to3": window["oh5"],
+                    "oh3_coding_site_5to3": window["oh3"],
+                    "n_terminal_overhang_5p": n_terminal,
+                    "c_terminal_overhang_5p": c_terminal,
+                    "overhang_notation": "assembled_coding_strand_site",
                     "oh5_mask_start": window["oh5_pos"],
                     "oh3_mask_start": window["oh3_pos"],
                     "genome_start": window["start"],
@@ -370,6 +429,17 @@ def build_parts_table(records: Sequence[dict]) -> pd.DataFrame:
             "native_cds": r["coding_dna"],
             "oh5": r["oh5"],
             "oh3": r["oh3"],
+            "oh5_coding_site_5to3": r.get("oh5_coding_site_5to3", r["oh5"]),
+            "oh3_coding_site_5to3": r.get("oh3_coding_site_5to3", r["oh3"]),
+            "n_terminal_overhang_5p": r.get(
+                "n_terminal_overhang_5p", r["oh5"]
+            ),
+            "c_terminal_overhang_5p": r.get(
+                "c_terminal_overhang_5p", r["oh3"]
+            ),
+            "overhang_notation": r.get(
+                "overhang_notation", "assembled_coding_strand_site"
+            ),
             "oh5_mask_start": r["oh5_mask_start"],
             "oh3_mask_start": r["oh3_mask_start"],
         }
@@ -388,12 +458,19 @@ def build_junction_map_9s(records: Sequence[dict]) -> pd.DataFrame:
         rec = by_id[part_id]
         start = rec["oh5_mask_start"] if which == "5" else rec["oh3_mask_start"]
         oh = rec["oh5"] if which == "5" else rec["oh3"]
+        terminal = (
+            rec.get("n_terminal_overhang_5p", oh)
+            if which == "5"
+            else rec.get("c_terminal_overhang_5p", oh)
+        )
         rows.append(
             {
                 "junction": junction,
                 "part_id": part_id,
                 "mask_start_0based": int(start),
                 "native_overhang": oh,
+                "assembled_coding_site_5to3": oh,
+                "directional_terminal_5p": terminal,
                 "end": "5prime" if which == "5" else "3prime",
             }
         )
@@ -729,6 +806,11 @@ def import_grasp_profile(
             "coding_mask",
             "oligo_prefix",
             "oligo_suffix",
+            "oh5_coding_site_5to3",
+            "oh3_coding_site_5to3",
+            "n_terminal_overhang_5p",
+            "c_terminal_overhang_5p",
+            "overhang_notation",
             "oh5_mask_start",
             "oh3_mask_start",
         ]

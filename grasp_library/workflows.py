@@ -306,6 +306,11 @@ def run_library_optimize(
         for column in (
             "oh5",
             "oh3",
+            "oh5_coding_site_5to3",
+            "oh3_coding_site_5to3",
+            "n_terminal_overhang_5p",
+            "c_terminal_overhang_5p",
+            "overhang_notation",
             "oh5_mask_start",
             "oh3_mask_start",
             "oh5_junction",
@@ -598,11 +603,18 @@ def ensure_grasp_imported(
     cached_text = parts_path.read_text() if parts_path.exists() else ""
     cached_lines = cached_text.splitlines()
     cached_header = cached_lines[0] if cached_lines else ""
+    full_path = input_dir / "parts_full.csv"
+    full_lines = full_path.read_text().splitlines() if full_path.exists() else []
+    full_header = full_lines[0] if full_lines else ""
     cached_ok = (
         parts_path.exists()
         and "REPLACE" not in cached_text[:500]
         and "oh5_mask_start" in cached_header
         and "oh3_mask_start" in cached_header
+        and "n_terminal_overhang_5p" in cached_header
+        and "c_terminal_overhang_5p" in cached_header
+        and "n_terminal_overhang_5p" in full_header
+        and "c_terminal_overhang_5p" in full_header
         and (input_dir / "junction_map.csv").exists()
         and (input_dir / "overhang_candidates.csv").exists()
     )

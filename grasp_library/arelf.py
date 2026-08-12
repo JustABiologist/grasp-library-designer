@@ -198,20 +198,41 @@ def _block_interfaces(config: Optional[Mapping]) -> Dict[str, dict]:
         canonical_item = dict(canonical.get(canonical_name, {}))
         normalized = {
             "upstream_c": canonical_item.get(
-                "upstream_c_5p", canonical_item.get("assembled_plus_site")
+                "upstream_three_prime_end_overhang",
+                canonical_item.get(
+                    "upstream_c_5p",
+                    canonical_item.get(
+                        "assembled_coding_site",
+                        canonical_item.get("assembled_plus_site"),
+                    ),
+                ),
             ),
-            "downstream_n": canonical_item.get("downstream_n_5p"),
+            "downstream_n": canonical_item.get(
+                "downstream_five_prime_end_overhang",
+                canonical_item.get("downstream_n_5p"),
+            ),
+            "assembled_plus_site": canonical_item.get(
+                "assembled_coding_site",
+                canonical_item.get("assembled_plus_site"),
+            ),
             "arelf_offset_nt": canonical_item.get("arelf_offset_nt"),
         }
         normalized = {key: value for key, value in normalized.items() if value is not None}
+        legacy_item = dict(configured.get(name, {}))
+        if "upstream_c" in legacy_item and "assembled_plus_site" not in legacy_item:
+            legacy_item["assembled_plus_site"] = legacy_item["upstream_c"]
         item = {
             **defaults,
             **normalized,
-            **dict(configured.get(name, {})),
+            **legacy_item,
         }
         upstream = _dna4(item["upstream_c"], label=f"{name} upstream overhang")
         downstream = _dna4(
             item["downstream_n"], label=f"{name} downstream overhang"
+        )
+        assembled = _dna4(
+            item.get("assembled_plus_site", upstream),
+            label=f"{name} assembled coding-strand site",
         )
         if downstream != reverse_complement(upstream):
             raise ValueError(
@@ -222,9 +243,11 @@ def _block_interfaces(config: Optional[Mapping]) -> Dict[str, dict]:
         if offset not in ARELF_OFFSETS:
             raise ValueError(f"{name}: ARELF cut offset must be between 0 and 11")
         result[name] = {
-            "overhang": upstream,
+            "overhang": assembled,
             "offset": offset,
+            "upstream_c": upstream,
             "downstream_n": downstream,
+            "assembled_plus_site": assembled,
         }
     return result
 
@@ -359,6 +382,22 @@ def materialize_arelf_parts(
                 "coding_mask": "".join(mask),
                 "oh5": left_oh,
                 "oh3": right_oh,
+                "oh5_coding_site_5to3": left_oh,
+                "oh3_coding_site_5to3": right_oh,
+                # Most Level -1 junction labels use the assembled coding-site
+                # convention.  Inter-block terminals additionally carry the
+                # explicit directional 5′ labels from the interface profile.
+                "n_terminal_overhang_5p": (
+                    interfaces[left_name]["downstream_n"]
+                    if left_name in interfaces
+                    else left_oh
+                ),
+                "c_terminal_overhang_5p": (
+                    interfaces[right_name]["upstream_c"]
+                    if right_name in interfaces
+                    else right_oh
+                ),
+                "overhang_notation": "assembled_coding_strand_site",
                 "oh5_mask_start": oh5,
                 "oh3_mask_start": oh3,
                 "oh5_junction": left_name,

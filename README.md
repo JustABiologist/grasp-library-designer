@@ -85,12 +85,16 @@ not cloning guarantees. Synthesis QC distinguishes `PASS`, `WARNING`, and
 
 The order file contains double-stranded synthesis fragments with paired,
 inward-facing BsaI sites. Every interface is explicit in `CONFIG` and editable
-in the dashboard. Defaults use directional terminal-5′ notation:
+in the dashboard. Terminal-side labels name the physical end of the coding-
+oriented construct: **N-terminal side = 5′ end** and **C-terminal side = 3′
+end**. Every overhang label is written 5′→3′, so compatible ends are reverse
+complements. Bases retained on the assembled coding strand are tracked
+separately where they differ from the physical sticky-end label. Defaults are:
 
-- Level −1 entry vector: N `AACA`, C `GGAG`.
-- Level 0 acceptor release boundaries: N `CTCA`, C `CGAG`.
-- CDS1 C end / CDS2 N end: `CTTC` / `GAAG` (a reverse-complement pair).
-- Resulting Level 1 cassette: N `GCCC`, C `GCGA`.
+- Level −1 entry vector: 5′/N side `AACA`, 3′/C side `GGAG`.
+- Level 0 acceptor release boundaries: 5′/N side `CTCA`, 3′/C side `CGAG`.
+- CDS1 3′/C side / CDS2 5′/N side: `CTTC` / `GAAG`.
+- Resulting Level 1 cassette: 5′/N side `GCCC`, 3′/C side `GCGA`.
 
 The first and last pairs are custom defaults. They must not be described as
 native pAGM1311 or pICH47802 interfaces. A deposited-GRASP preset is retained
@@ -104,8 +108,9 @@ expression construct; promoter, N-terminal domain, effector, terminator, and
 acceptor context must be supplied separately.
 
 For 14S and 19S, the intermediate directional pairs are also configurable:
-`GTGA/TCAC` for CDS1→CDS14 and `CACG/CGTG` for CDS14→CDS19. Their default
-ARELF offsets are 4 and 1; the CDS1→CDS2 default offset is 11.
+`GTGA/TCAC` for the CDS1 3′/C-side → CDS14 5′/N-side junction and
+`CACG/CGTG` for the CDS14 3′/C-side → CDS19 5′/N-side junction. Default ARELF
+offsets are 4 and 1; the CDS1→CDS2 default offset is 11.
 
 ---
 

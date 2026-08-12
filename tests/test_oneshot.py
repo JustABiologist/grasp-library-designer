@@ -93,10 +93,15 @@ def test_oneshot_exports_custom_vector_requirements_and_ppr_chain(
     assert result["summary"]["architecture"] == architecture
     assert result["summary"]["entry_vector"] == "Custom Level -1 entry vector"
     assert result["summary"]["level0_acceptor"] == "Custom Level 0 acceptor"
-    assert result["summary"]["entry_n_terminal_overhang_5p"] == "AACA"
-    assert result["summary"]["entry_c_terminal_overhang_5p"] == "GGAG"
-    assert result["summary"]["final_cassette_n_terminal_overhang_5p"] == "GCCC"
-    assert result["summary"]["final_cassette_c_terminal_overhang_5p"] == "GCGA"
+    assert result["summary"]["entry_five_prime_end_overhang"] == "AACA"
+    assert result["summary"]["entry_three_prime_end_overhang"] == "GGAG"
+    assert result["summary"]["entry_three_prime_assembled_coding_site"] == "CTCC"
+    assert result["summary"][
+        "final_cassette_five_prime_end_overhang"
+    ] == "GCCC"
+    assert result["summary"][
+        "final_cassette_three_prime_end_overhang"
+    ] == "GCGA"
     assert result["summary"]["translation_verified"] is True
     assert len(result["level0_assemblies"]) == len(interfaces.split(";")) - 1
     assert result["level0_assemblies"][

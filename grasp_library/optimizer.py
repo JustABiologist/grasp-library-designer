@@ -22,6 +22,7 @@ from .dna import (
     longest_homopolymer,
     mask_matches,
     repeated_kmer_penalty,
+    reverse_complement,
     translate_dna,
 )
 
@@ -529,6 +530,15 @@ def optimize_library(
                     and mask_matches(sequence, coding_mask)
                 ),
             }
+            for metadata_column in (
+                "oh5_coding_site_5to3",
+                "oh3_coding_site_5to3",
+                "n_terminal_overhang_5p",
+                "c_terminal_overhang_5p",
+                "overhang_notation",
+            ):
+                if metadata_column in row.index:
+                    result[metadata_column] = row[metadata_column]
             part_versions.append(result)
             results.append(result)
             library_kmers.update(kmer_counts(sequence, repeat_k))
@@ -597,6 +607,11 @@ def simulate_assembled_cds(
         parts_full.set_index("part_id") if parts_full is not None else None
     )
     used_overhang_bounds = False
+    previous_right_site = None
+    previous_c_terminal = None
+    previous_group = None
+    coding_junctions_checked = 0
+    directional_terminal_pairs_checked = 0
 
     for i, row in enumerate(selected.itertuples(index=False)):
         cds = clean_dna(row.optimized_cds)
@@ -617,10 +632,52 @@ def simulate_assembled_cds(
                 )
             # Bounded insert: 5′ overhang … 3′ overhang (inclusive)
             insert = cds[oh5 : oh3 + 4]
+            left_site = insert[:4]
+            right_site = insert[-4:]
+            declared_left = clean_dna(
+                meta.get("oh5_coding_site_5to3", meta.get("oh5", left_site))
+            )
+            declared_right = clean_dna(
+                meta.get("oh3_coding_site_5to3", meta.get("oh3", right_site))
+            )
+            if left_site != declared_left or right_site != declared_right:
+                raise ValueError(
+                    f"{part_id}: optimized coding sites {left_site}/{right_site} "
+                    f"do not match declared sites {declared_left}/{declared_right}"
+                )
+            if previous_right_site is not None:
+                coding_junctions_checked += 1
+                if previous_right_site != left_site:
+                    raise ValueError(
+                        f"{part_id}: assembled coding-strand junction mismatch "
+                        f"{previous_right_site} != {left_site}"
+                    )
+
+            current_group = getattr(row, "assembly_group", None)
+            current_n_terminal = meta.get("n_terminal_overhang_5p")
+            crossing_blocks = (
+                previous_group is not None
+                and current_group is not None
+                and str(previous_group) != str(current_group)
+            )
+            if crossing_blocks and previous_c_terminal is not None and pd.notna(
+                current_n_terminal
+            ):
+                upstream = clean_dna(previous_c_terminal)
+                downstream = clean_dna(current_n_terminal)
+                directional_terminal_pairs_checked += 1
+                if reverse_complement(upstream) != downstream:
+                    raise ValueError(
+                        f"{previous_group}->{current_group}: directional terminal "
+                        f"mismatch reverse_complement({upstream}) != {downstream}"
+                    )
             if i == 0:
                 chunks.append(cds[:oh5] + insert)
             else:
                 chunks.append(insert[4:])
+            previous_right_site = right_site
+            previous_c_terminal = meta.get("c_terminal_overhang_5p")
+            previous_group = current_group
             used_overhang_bounds = True
         else:
             # Fallback when parts_full coordinates are unavailable
@@ -646,6 +703,11 @@ def simulate_assembled_cds(
             "overhang_bounded" if used_overhang_bounds else "full_cds_concat"
         ),
         "expected_source": expected_source,
+        "coding_junctions_checked": coding_junctions_checked,
+        "directional_terminal_pairs_checked": directional_terminal_pairs_checked,
+        "coding_junctions_verified": bool(
+            used_overhang_bounds and coding_junctions_checked == max(0, len(selected) - 1)
+        ),
     }
     if len(assembled_cds) % 3 != 0:
         result["stitch_warning"] = (
