@@ -150,15 +150,29 @@ def synthesis_score(
 
 def build_oligos_from_cds(
     cds_by_part: Mapping[str, str],
-    flanks_by_part: Mapping[str, Tuple[str, str]],
+    flanks_by_part: Mapping[str, tuple],
+    config: Optional[Mapping] = None,
 ) -> Dict[str, str]:
-    """Assemble orderable oligos: prefix + CDS + suffix."""
+    """Build coordinate-safe synthesis fragments for the configured entry vector."""
+    from .import_grasp import build_configured_order_fragment
+
     oligos: Dict[str, str] = {}
     for part_id, cds in cds_by_part.items():
         if part_id not in flanks_by_part:
             continue
-        prefix, suffix = flanks_by_part[part_id]
-        oligos[part_id] = clean_dna(prefix) + clean_dna(cds) + clean_dna(suffix)
+        flank_data = flanks_by_part[part_id]
+        if len(flank_data) != 4:
+            raise ValueError(
+                f"{part_id}: missing overhang coordinates for order-fragment construction"
+            )
+        _, _, oh5, oh3 = flank_data
+        oligos[part_id] = build_configured_order_fragment(
+            cds,
+            part_id=part_id,
+            oh5_mask_start=int(oh5),
+            oh3_mask_start=int(oh3),
+            config=dict(config or {}),
+        )
     return oligos
 
 
@@ -349,7 +363,7 @@ def junction_synthesis_score(
 
 def evaluate_design(
     *,
-    overhangs: Sequence[str],
+    overhangs: Sequence[str] | Mapping[str, str],
     cds_sequences: Sequence[str],
     aa_sequences: Sequence[str],
     codon_data: Mapping[str, Sequence[dict]],
@@ -365,6 +379,12 @@ def evaluate_design(
     """
     Score a complete design on all three Pareto objectives.
 
+    - Ligation: if ``overhangs`` is a junction-name mapping, report the
+      orientation-invariant score of one physical Level 0 reaction. Every PPR
+      block uses the same junction set in a separate tube, so the objective does
+      not multiply unrelated transformations/screening steps.
+      A bare sequence retains the legacy single-reaction behavior for generic
+      Golden Gate and one-shot designs.
     - Codon: mean log relative adaptiveness over full CDS sequences.
     - Synthesis: mean fitness over full oligos (prefix + CDS + suffix) when
       flanks/oligos are provided; otherwise full CDS. Forbidden sites are
@@ -377,7 +397,25 @@ def evaluate_design(
         hours=config.get("ligation", {}).get("hours", 18),
     )
 
-    if overhangs:
+    if isinstance(overhangs, Mapping) and overhangs:
+        from .assembly_interfaces import resolve_assembly_interfaces
+
+        assembly_profile = resolve_assembly_interfaces(config)
+        configured_outer = assembly_profile["level0"].get("acceptor_outer")
+        external_overhangs = (
+            (
+                configured_outer["n_overhang_5p"],
+                configured_outer["c_overhang_5p"],
+            )
+            if configured_outer is not None
+            else None
+        )
+        fidelity = calc.grasp_first_stage_fidelity(
+            overhangs,
+            architecture=str(config.get("architecture", "9S")),
+            external_overhangs=external_overhangs,
+        )
+    elif overhangs:
         fidelity = calc.set_fidelity(overhangs)
     else:
         fidelity = 1.0
@@ -390,7 +428,9 @@ def evaluate_design(
             codon_data,
         )
         if oligos_by_part is None and flanks_by_part is not None:
-            oligos_by_part = build_oligos_from_cds(cds_by_part, flanks_by_part)
+            oligos_by_part = build_oligos_from_cds(
+                cds_by_part, flanks_by_part, config=config
+            )
         if oligos_by_part:
             synthesis = oligo_synthesis_score(
                 oligos_by_part,

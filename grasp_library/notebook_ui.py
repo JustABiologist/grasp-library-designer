@@ -63,8 +63,9 @@ def hero() -> None:
     color: {INK_SOFT};
     max-width: 52rem;
   ">
-    Redesign GRASP module DNA for your organism without moving cut sites or
-    changing proteins. Pick options below — then run the cells beneath.
+    Redesign GRASP module DNA for your organism while preserving the protein.
+    Cuts may move only within the invariant ARELF motif. Pick options below —
+    then run the cells beneath.
   </div>
   <div style="
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -73,8 +74,8 @@ def hero() -> None:
     flex-wrap: wrap;
     gap: 8px;
   ">
-    {_chip("fixed cut indices")}
-    {_chip("overhang sequences")}
+    {_chip("ARELF-restricted cuts")}
+    {_chip("configurable vector interfaces")}
     {_chip("Pareto front")}
     {_chip("organism codon tables")}
   </div>

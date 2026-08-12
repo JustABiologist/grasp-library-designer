@@ -19,14 +19,37 @@ Writes into `grasp_library_project/input/`:
 
 | File | Role |
 |---|---|
-| `parts.csv` | AA, coding masks, BpiI oligo flanks |
+| `parts.csv` | AA, coding masks, pAGM1311 BsaI order arms, and overhang coordinates |
 | `parts_full.csv` | Sidecar with native CDS + overhang coordinates |
-| `junction_map.csv` | Fixed `mask_start_0based` for 7 unique 9S overhangs |
-| `overhang_candidates.csv` | Native + synonym-compatible 4-mers |
+| `junction_map.csv` | Native cut coordinates from the deposited modules |
+| `overhang_candidates.csv` | Native fixed-cut candidates retained for provenance / compatibility |
 | `target_map.csv` | Module catalog (plans via `compile_target_gap`) |
 
-## 9S overhang set (do not move cut indices)
+## Native 9S overhang set
 
 `AGGT – ACTC – AAGA – GCAC – TGAA – CTTC – ACTC – AAGA – GCAC – TGAA – TTCG`
 
-B/C/D are shared across CDS1/CDS2, so redesign uses 7 unique junction variables (`J_Nterm` … `J_Cterm`). Prefer `1A_*_AGGT` for MoClo N-terminal fusion; `AATG` variants are kept as alternate parts.
+B/C/D are shared across every five-part Level 0 block. The runtime redesign is
+limited to cuts fully contained within invariant `ARELF`, but it is not limited
+to the paper's native cut indices: all motif-relative starts 0–11 are explored.
+Candidate identity includes both the four-base overhang and its ARELF offset.
+Prefer `1A_*_AGGT` for the deposited N-terminal fusion; `AATG` variants remain
+available as alternate start-compatible parts.
+
+Deposited subsequent MoClo block chains are:
+
+- 9S: `AGGT–CDS1–CTTC–CDS2–TTCG`
+- 14S: `AGGT–CDS1–GTGA–CDS14–CTTC–CDS2–TTCG`
+- 19S: `AGGT–CDS1–GTGA–CDS14–CACG–CDS19–CTTC–CDS2–TTCG`
+
+## Physical cloning path
+
+Order each part as a double-stranded synthesis fragment with inward-facing BsaI recognition sites. The following top strand is derived from the paper's pAGM1311 primer geometry and verified against the deposited vector maps:
+
+`TTTGGTCTCAACAT{pAGM1311 insert}TTGTTGAGACCAAA`
+
+This is the deposited-GRASP preset. The dashboard also accepts named custom
+Level −1, Level 0, and Level 1 interfaces. Directional C/N pairs are required to
+be reverse complements. Without a custom acceptor sequence, the software can
+check insert geometry and interface requirements but cannot claim that the
+custom vector backbone was sequence-simulated.

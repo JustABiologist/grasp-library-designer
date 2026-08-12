@@ -303,11 +303,34 @@ def optimize_coding_sequence(
     return best_sequence, best_score
 
 
-def synthesis_qc(sequence: str, config: Mapping, *, forbidden_scan: Optional[str] = None):
-    """QC a DNA string. Forbidden sites scanned on `forbidden_scan` if given."""
+def synthesis_qc(
+    sequence: str,
+    config: Mapping,
+    *,
+    forbidden_scan: Optional[str] = None,
+    sequence_kind: str = "generic",
+):
+    """QC a DNA string with explicit clean/warning/failure semantics.
+
+    ``passed`` means a clean pass: no soft guideline warnings and no hard
+    failures. ``hard_constraints_passed`` remains true for a sequence that has
+    only warnings. Length limits are checked only when ``sequence_kind`` is
+    ``"oligo"`` or ``"gene"``; this avoids applying gene-product limits to an
+    individual GRASP module CDS.
+
+    This is a transparent heuristic, not confirmation that a synthesis vendor
+    will accept an order. Non-machine-checkable vendor rules are returned for
+    manual review.
+    """
     synthesis = config["synthesis"]
     sequence = clean_dna(sequence)
     scan = clean_dna(forbidden_scan) if forbidden_scan is not None else sequence
+
+    valid_kinds = {"generic", "cds", "oligo", "gene"}
+    if sequence_kind not in valid_kinds:
+        raise ValueError(
+            f"Unknown sequence_kind {sequence_kind!r}; expected one of {sorted(valid_kinds)}"
+        )
 
     gc = gc_fraction(sequence)
     homopolymer = longest_homopolymer(sequence)
@@ -333,6 +356,49 @@ def synthesis_qc(sequence: str, config: Mapping, *, forbidden_scan: Optional[str
     if forbidden_hits:
         failures.append("Forbidden restriction site in CDS")
 
+    if sequence_kind == "oligo":
+        minimum = synthesis.get("min_oligo_length")
+        maximum = synthesis.get("max_oligo_length")
+        if minimum is not None and len(sequence) < int(minimum):
+            failures.append(f"Oligo shorter than configured minimum ({minimum} bp)")
+        if maximum is not None and len(sequence) > int(maximum):
+            failures.append(f"Oligo longer than configured maximum ({maximum} bp)")
+    elif sequence_kind == "gene":
+        minimum = synthesis.get("min_gene_length")
+        maximum = synthesis.get("max_gene_length")
+        if minimum is not None and len(sequence) < int(minimum):
+            failures.append(f"Gene shorter than configured minimum ({minimum} bp)")
+        if maximum is not None and len(sequence) > int(maximum):
+            failures.append(f"Gene longer than configured maximum ({maximum} bp)")
+
+    vendor_meta = config.get("synthesis_vendor_meta", {})
+    machine_hard = vendor_meta.get("machine_hard_constraints", {}) or {}
+    hard_max_homopolymer = machine_hard.get("max_homopolymer")
+    if (
+        hard_max_homopolymer is not None
+        and homopolymer > int(hard_max_homopolymer)
+    ):
+        failures.append(
+            "Homopolymer exceeds vendor hard maximum "
+            f"({hard_max_homopolymer} nt)"
+        )
+
+    # Preserve order while avoiding duplicate diagnostics.
+    warnings = list(dict.fromkeys(warnings))
+    failures = list(dict.fromkeys(failures))
+    hard_constraints_passed = len(failures) == 0
+    passed = hard_constraints_passed and len(warnings) == 0
+    if failures:
+        status = "FAIL"
+    elif warnings:
+        status = "WARNING"
+    else:
+        status = "PASS"
+
+    manual_rules = vendor_meta.get(
+        "manual_review_rules", vendor_meta.get("hard_rules", [])
+    ) or []
+
     return {
         "length": len(sequence),
         "gc_fraction": gc,
@@ -342,7 +408,13 @@ def synthesis_qc(sequence: str, config: Mapping, *, forbidden_scan: Optional[str
         "forbidden_hits": json.dumps(forbidden_hits),
         "warnings": "; ".join(warnings),
         "failures": "; ".join(failures),
-        "passed": len(failures) == 0,
+        "warning_count": len(warnings),
+        "failure_count": len(failures),
+        "status": status,
+        "hard_constraints_passed": hard_constraints_passed,
+        "passed": passed,
+        "vendor_acceptance_confirmed": False,
+        "manual_vendor_rules": "; ".join(str(rule) for rule in manual_rules),
     }
 
 
@@ -374,13 +446,31 @@ def optimize_library(
                 config=config,
                 external_kmers=library_kmers,
             )
-            full_oligo = (
-                clean_dna(row["oligo_prefix"])
-                + sequence
-                + clean_dna(row["oligo_suffix"])
+            if {"oh5_mask_start", "oh3_mask_start"} <= set(parts.columns):
+                from .assembly_interfaces import order_fragment_arms, resolve_assembly_interfaces
+                from .import_grasp import build_configured_order_fragment
+
+                interfaces = resolve_assembly_interfaces(config)
+                full_oligo = build_configured_order_fragment(
+                    sequence,
+                    part_id=str(row["part_id"]),
+                    oh5_mask_start=int(row["oh5_mask_start"]),
+                    oh3_mask_start=int(row["oh3_mask_start"]),
+                    interfaces=interfaces,
+                )
+                actual_prefix, actual_suffix = order_fragment_arms(interfaces)
+            else:
+                raise ValueError(
+                    "parts table lacks oh5_mask_start/oh3_mask_start; re-import "
+                    "the bundled GRASP profile before generating order fragments"
+                )
+            cds_qc = synthesis_qc(sequence, config, sequence_kind="cds")
+            oligo_qc = synthesis_qc(
+                full_oligo,
+                config,
+                forbidden_scan=sequence,
+                sequence_kind="oligo",
             )
-            cds_qc = synthesis_qc(sequence, config)
-            oligo_qc = synthesis_qc(full_oligo, config, forbidden_scan=sequence)
             translation = verify_cds_for_organism(
                 sequence,
                 aa_sequence,
@@ -395,8 +485,8 @@ def optimize_library(
                 "aa_sequence": aa_sequence,
                 "coding_mask": coding_mask,
                 "optimized_cds": sequence,
-                "oligo_prefix": clean_dna(row["oligo_prefix"]),
-                "oligo_suffix": clean_dna(row["oligo_suffix"]),
+                "oligo_prefix": actual_prefix,
+                "oligo_suffix": actual_suffix,
                 "oligo_sequence_5to3": full_oligo,
                 "objective_score": objective,
                 "codon_score": codon_score(sequence, aa_sequence, codon_data),
@@ -412,6 +502,26 @@ def optimize_library(
                 "oligo_gc": oligo_qc["gc_fraction"],
                 "oligo_warnings": oligo_qc["warnings"],
                 "oligo_failures": oligo_qc["failures"],
+                "qc_status": (
+                    "FAIL"
+                    if (
+                        not cds_qc["hard_constraints_passed"]
+                        or not oligo_qc["hard_constraints_passed"]
+                        or not bool(translation["ok"])
+                        or not mask_matches(sequence, coding_mask)
+                    )
+                    else "WARNING"
+                    if (cds_qc["warnings"] or oligo_qc["warnings"])
+                    else "PASS"
+                ),
+                "hard_constraints_passed": (
+                    cds_qc["hard_constraints_passed"]
+                    and oligo_qc["hard_constraints_passed"]
+                    and bool(translation["ok"])
+                    and mask_matches(sequence, coding_mask)
+                ),
+                "vendor_acceptance_confirmed": False,
+                "manual_vendor_rules": oligo_qc["manual_vendor_rules"],
                 "qc_passed": (
                     cds_qc["passed"]
                     and oligo_qc["passed"]
@@ -543,7 +653,7 @@ def simulate_assembled_cds(
             "skipped ORF translation check."
         )
         if config is not None:
-            qc = synthesis_qc(assembled_cds, config)
+            qc = synthesis_qc(assembled_cds, config, sequence_kind="gene")
             qc["passed"] = False
             result.update(qc)
         return result
@@ -574,5 +684,5 @@ def simulate_assembled_cds(
         result["translation_verified"] = observed_protein == expected_protein
 
     if config is not None:
-        result.update(synthesis_qc(assembled_cds, config))
+        result.update(synthesis_qc(assembled_cds, config, sequence_kind="gene"))
     return result

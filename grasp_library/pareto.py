@@ -10,6 +10,7 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import pandas as pd
 
+from .arelf import format_cut_token, parse_cut_token, selection_overhangs
 from .dna import (
     apply_overhang_to_mask,
     clean_dna,
@@ -57,7 +58,7 @@ def pareto_front(points: Sequence[ParetoPoint]) -> List[ParetoPoint]:
 
 
 def _valid_overhang_set(selection: Mapping[str, str]) -> bool:
-    overhangs = list(selection.values())
+    overhangs = list(selection_overhangs(selection).values())
     if any(is_self_reverse_complement(o) for o in overhangs):
         return False
     used = set()
@@ -73,14 +74,41 @@ def _valid_overhang_set(selection: Mapping[str, str]) -> bool:
 def score_overhang_set_ggassembler(
     selection: Mapping[str, str],
     fidelity_calculator: LigationFidelityCalculator,
+    *,
+    architecture: str = "9S",
+    external_overhangs: Optional[Sequence[str]] = None,
 ) -> float:
     if not selection:
         return 1.0
-    if not _valid_overhang_set(selection):
+    overhang_selection = selection_overhangs(selection)
+    outer = tuple(
+        external_overhangs
+        or fidelity_calculator.GRASP_LEVEL0_EXTERNAL_OVERHANGS
+    )
+    if len(outer) != 2:
+        raise ValueError("Level 0 external overhangs require N and C values")
+    physical = {
+        "J_level0_left": outer[0],
+        **overhang_selection,
+        "J_level0_right": outer[1],
+    }
+    if not _valid_overhang_set(physical):
         return 0.0
     try:
-        return fidelity_calculator.set_fidelity(selection.values())
-    except ValueError:
+        complete = set(fidelity_calculator.GRASP_LEVEL0_INTERNAL_JUNCTIONS) <= set(
+            overhang_selection
+        )
+        if complete:
+            return fidelity_calculator.grasp_first_stage_fidelity(
+                overhang_selection,
+                architecture=architecture,
+                external_overhangs=outer,
+            )
+        # Partial beam states cannot yet form a physical reaction.  Retain a
+        # deterministic generic score only to rank them until all four named
+        # internal junctions are present.
+        return fidelity_calculator.set_fidelity(overhang_selection.values())
+    except (KeyError, ValueError):
         return 0.0
 
 
@@ -114,6 +142,18 @@ def optimize_pareto_overhangs(
         temperature=config.get("ligation", {}).get("temperature", 25),
         hours=config.get("ligation", {}).get("hours", 18),
     )
+    from .assembly_interfaces import resolve_assembly_interfaces
+
+    assembly_profile = resolve_assembly_interfaces(config)
+    configured_outer = assembly_profile["level0"].get("acceptor_outer")
+    external_overhangs = (
+        (
+            configured_outer["n_overhang_5p"],
+            configured_outer["c_overhang_5p"],
+        )
+        if configured_outer is not None
+        else calc.GRASP_LEVEL0_EXTERNAL_OVERHANGS
+    )
 
     table = candidates.copy()
     table["junction"] = table["junction"].astype(str)
@@ -122,8 +162,18 @@ def optimize_pareto_overhangs(
     )
     table = table[~table["overhang"].map(is_self_reverse_complement)].copy()
 
+    if "cut_token" in table.columns:
+        table["candidate_token"] = table["cut_token"].astype(str)
+    elif "motif_offset_nt" in table.columns:
+        table["candidate_token"] = [
+            format_cut_token(overhang, int(offset))
+            for overhang, offset in zip(table["overhang"], table["motif_offset_nt"])
+        ]
+    else:
+        # Backwards-compatible fixed-cut candidate tables carry only the 4-mer.
+        table["candidate_token"] = table["overhang"]
     grouped = {
-        junction: group["overhang"].tolist()
+        junction: list(dict.fromkeys(group["candidate_token"].tolist()))
         for junction, group in table.groupby("junction")
     }
     junctions = sorted(grouped, key=lambda j: len(grouped[j]))
@@ -133,16 +183,24 @@ def optimize_pareto_overhangs(
     for junction in junctions:
         new_states: List[Tuple[Dict[str, str], float]] = []
         for selection, _ in states:
-            used = set(selection.values())
+            used = set(selection_overhangs(selection).values()) | set(
+                external_overhangs
+            )
             used_rc = {reverse_complement(o) for o in used}
-            for overhang in grouped[junction]:
+            for candidate_token in grouped[junction]:
+                overhang, _ = parse_cut_token(candidate_token)
                 if overhang in used or overhang in used_rc:
                     continue
                 if reverse_complement(overhang) in used:
                     continue
                 new_selection = dict(selection)
-                new_selection[junction] = overhang
-                fidelity = score_overhang_set_ggassembler(new_selection, calc)
+                new_selection[junction] = candidate_token
+                fidelity = score_overhang_set_ggassembler(
+                    new_selection,
+                    calc,
+                    architecture=str(config.get("architecture", "9S")),
+                    external_overhangs=external_overhangs,
+                )
                 if fidelity <= 0:
                     continue
                 new_states.append((new_selection, fidelity))
@@ -158,7 +216,23 @@ def optimize_pareto_overhangs(
     points: List[ParetoPoint] = []
     for selection, fidelity_guess in states:
         try:
-            cds_by_part, aa_by_part = optimize_cds_for_masks(selection)
+            optimized = optimize_cds_for_masks(selection)
+            if len(optimized) == 2:
+                cds_by_part, aa_by_part = optimized
+                point_flanks = flanks_by_part
+                point_junction_map = junction_map
+            elif len(optimized) == 4:
+                (
+                    cds_by_part,
+                    aa_by_part,
+                    point_flanks,
+                    point_junction_map,
+                ) = optimized
+            else:
+                raise ValueError(
+                    "CDS optimizer must return (cds, aa) or "
+                    "(cds, aa, dynamic_flanks, dynamic_junction_map)"
+                )
         except Exception as exc:  # keep searching other sets
             points.append(
                 ParetoPoint(
@@ -171,7 +245,7 @@ def optimize_pareto_overhangs(
 
         part_ids = sorted(cds_by_part)
         scores = evaluate_design(
-            overhangs=list(selection.values()),
+            overhangs=selection_overhangs(selection),
             cds_sequences=[cds_by_part[p] for p in part_ids],
             aa_sequences=[aa_by_part[p] for p in part_ids],
             codon_data=codon_data,
@@ -179,8 +253,8 @@ def optimize_pareto_overhangs(
             fidelity_calculator=calc,
             cds_by_part=cds_by_part,
             aa_by_part=aa_by_part,
-            flanks_by_part=flanks_by_part,
-            junction_map=junction_map,
+            flanks_by_part=point_flanks,
+            junction_map=point_junction_map,
         )
         points.append(
             ParetoPoint(
@@ -189,7 +263,7 @@ def optimize_pareto_overhangs(
                 cds_by_part=cds_by_part,
                 meta={
                     "fidelity_beam": fidelity_guess,
-                    "synthesis_scope": "full_oligo" if flanks_by_part else "full_cds",
+                    "synthesis_scope": "full_oligo" if point_flanks else "full_cds",
                 },
             )
         )

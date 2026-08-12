@@ -1,7 +1,37 @@
 project_name: GRASP_9S_organism_optimized
 genetic_code: 1
-architecture: 14S
+architecture: 9S
 nterm_overhang: AGGT
+assembly_interfaces:
+  overhang_notation: directional_terminal_5p
+  level_minus1_entry:
+    profile: custom
+    vector_name: Custom Level -1 entry vector
+    enzyme: BsaI
+    n_terminal_overhang: AACA
+    c_terminal_overhang: GGAG
+  level0:
+    acceptor_name: Custom Level 0 acceptor
+    release_enzyme: BpiI / BbsI
+    acceptor_n_terminal_overhang: CTCA
+    acceptor_c_terminal_overhang: CGAG
+    block_junctions:
+      cds1_to_cds14:
+        upstream_c: GTGA
+        downstream_n: TCAC
+        arelf_offset_nt: 4
+      cds14_to_cds19:
+        upstream_c: CACG
+        downstream_n: CGTG
+        arelf_offset_nt: 1
+      cds1_to_cds2:
+        upstream_c: CTTC
+        downstream_n: GAAG
+        arelf_offset_nt: 11
+  level1:
+    acceptor_name: Custom Level 1 acceptor
+    n_terminal_overhang: GCCC
+    c_terminal_overhang: GCGA
 assembly_enzyme: "GRASP default \xB7 BsaI + BpiI + BsmBI"
 synthesis_vendor: "Twist \xB7 Express / Low complexity"
 codon_usage_file: grasp_library_project/input/codon_usage.csv
@@ -39,15 +69,31 @@ optimizer:
   final_temperature: 0.02
   orthogonal_versions_per_part: 1
 ligation:
-  temperature: 25
-  hours: 18
+  temperature: null
+  hours: null
   min_efficiency: 0.25
   min_fidelity: 0.9
-  table_name: "T4 \xB7 18 h \xB7 25 \xB0C (Potapov)"
-  ligation_table: null
+  table_name: "GRASP Level 0 proxy \xB7 BbsI-HF + T4 \xB7 37\u219416 \xB0C cycling (Pryor 2020)"
+  ligation_table: BbsI-HF.csv
+  assay_kind: golden_gate_cycling
+  exact_for_grasp: false
 overhang_redesign:
-  enabled: true
+  enabled: false
   selection: knee
+  cut_mode: movable_arelf
+  allowed_arelf_offsets_nt:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  - 9
+  - 10
+  - 11
 pareto:
   max_evaluations: 40
   beam_width: 40

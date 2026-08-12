@@ -12,7 +12,7 @@ Click a badge → run **0 · Install** (PyPI) → fill the forms top to bottom. 
 
 | Notebook | Open |
 |---|---|
-| **One-shot** (one RNA → free GGA oligos) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/JustABiologist/grasp-library-designer/blob/main/grasp_oneshot_designer.ipynb) |
+| **One-shot** (one RNA → configured Level −1 order fragments) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/JustABiologist/grasp-library-designer/blob/main/grasp_oneshot_designer.ipynb) |
 | **Library** (42-module redesign → GAP compile) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/JustABiologist/grasp-library-designer/blob/main/grasp_library_designer.ipynb) |
 
 Direct links:
@@ -23,10 +23,11 @@ Direct links:
 Each notebook installs with:
 
 ```python
-%pip install -q -U "grasp-library-designer>=0.1.5"
+%pip install -q -U "grasp-library-designer>=0.1.7"
 ```
 
-Bundled GenBank modules and Potapov ligation tables ship inside the PyPI package (`materialize_project()`).
+Bundled GenBank modules, Potapov ligase-only matrices, and Pryor Golden Gate
+cycling matrices ship inside the package (`materialize_project()`).
 
 ---
 
@@ -61,10 +62,50 @@ write_notebook("oneshot")   # or "library"
 
 | Notebook | Purpose |
 |---|---|
-| [`grasp_oneshot_designer.ipynb`](grasp_oneshot_designer.ipynb) | One target RNA → binder protein → free GGA cut sites → oligos |
+| [`grasp_oneshot_designer.ipynb`](grasp_oneshot_designer.ipynb) | One target RNA → target-specific GRASP modules → BsaI order fragments for the configured Level −1 entry vector → BpiI Level 0 blocks |
 | [`grasp_library_designer.ipynb`](grasp_library_designer.ipynb) | Redesign / anneal the 42-module combinatorial library, then GAP-compile a target |
 
-Hard constraints (library path): protein fixed (synonymous codons only); coding Golden Gate overhang bases stay locked in `coding_mask`. Objectives: ligation fidelity (Potapov / GGAssembler), codon optimality, synthesis fitness.
+Hard constraints (library path): the protein sequence is fixed and every movable
+four-base cut is restricted to the invariant `ARELF` motif. The search explores
+all motif-relative offsets 0–11 rather than only the four cut positions chosen
+in the paper. A candidate is therefore an `(overhang, ARELF offset)` pair, and
+each part is rematerialized before codon optimization. Objectives are ligation
+fidelity, codon optimality, and synthesis fitness.
+
+Ligation fidelity is reported per physical six-overhang Level 0 reaction (and
+optionally as an explicitly labelled product across independently transformed
+blocks). The scalar is the orientation-invariant geometric mean of the two
+directional products. The dashboard includes directly measured Pryor et al.
+37↔16 °C Golden Gate cycling matrices as labelled GRASP proxies. Potapov’s
+ligase-only data contain no 16 °C matrix, so the program does not interpolate or
+blend static temperature matrices. These scores are optimization surrogates,
+not cloning guarantees. Synthesis QC distinguishes `PASS`, `WARNING`, and
+`FAIL`; vendor profiles remain transparent heuristics with
+`vendor_acceptance_confirmed=False`.
+
+The order file contains double-stranded synthesis fragments with paired,
+inward-facing BsaI sites. Every interface is explicit in `CONFIG` and editable
+in the dashboard. Defaults use directional terminal-5′ notation:
+
+- Level −1 entry vector: N `AACA`, C `GGAG`.
+- Level 0 acceptor release boundaries: N `CTCA`, C `CGAG`.
+- CDS1 C end / CDS2 N end: `CTTC` / `GAAG` (a reverse-complement pair).
+- Resulting Level 1 cassette: N `GCCC`, C `GCGA`.
+
+The first and last pairs are custom defaults. They must not be described as
+native pAGM1311 or pICH47802 interfaces. A deposited-GRASP preset is retained
+for pAGM1311/pAGM9121 compatibility. When no acceptor-vector sequence is
+provided, the exporter validates the insert geometry and interface requirements
+but honestly reports that it did not simulate the vector backbone.
+
+The exported GRASP tract is a PPR block set, not a standalone expression
+plasmid. The PPR block-chain check does not validate an entire Level 1
+expression construct; promoter, N-terminal domain, effector, terminator, and
+acceptor context must be supplied separately.
+
+For 14S and 19S, the intermediate directional pairs are also configurable:
+`GTGA/TCAC` for CDS1→CDS14 and `CACG/CGTG` for CDS14→CDS19. Their default
+ARELF offsets are 4 and 1; the CDS1→CDS2 default offset is 11.
 
 ---
 

@@ -21,17 +21,19 @@ REPEAT_TEMPLATE = "W{fifth}AMISGYAQNGRIDEARELFDKMPER{last}VVS"
 
 
 def normalize_target_rna(sequence: str) -> str:
-    rna = str(sequence).upper().replace("T", "U")
-    rna = "".join(b for b in rna if b in "ACGU")
+    rna = "".join(str(sequence).upper().replace("T", "U").split())
     if not rna:
         raise ValueError("Empty target RNA")
+    invalid = sorted(set(rna) - set("ACGU"))
+    if invalid:
+        raise ValueError(
+            "Target RNA contains non-ACGU characters: " + ", ".join(invalid)
+        )
     if len(rna) not in (9, 14, 19):
         raise ValueError(
             f"Target RNA length must be 9, 14, or 19 (got {len(rna)}). "
             "GRASP binder scaffolds are defined for those sizes."
         )
-    if any(b not in _RNA_TO_CODE for b in rna):
-        raise ValueError(f"Non-ACGU base in target RNA: {sequence!r}")
     return rna
 
 

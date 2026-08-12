@@ -8,6 +8,12 @@ from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 import pandas as pd
 
+from .arelf import (
+    build_arelf_candidates,
+    dynamic_junction_map,
+    materialize_arelf_parts,
+    selection_overhangs,
+)
 from .dna import apply_overhang_to_mask, clean_mask, clean_dna
 from .import_grasp import compile_target_gap, import_grasp_profile
 from .ligation_fidelity import LigationFidelityCalculator
@@ -19,11 +25,18 @@ from .pareto import knee_point, optimize_pareto_overhangs
 from .plotting import plot_pareto_front
 
 
-def flanks_from_parts(parts_df: pd.DataFrame) -> Dict[str, Tuple[str, str]]:
+def flanks_from_parts(parts_df: pd.DataFrame) -> Dict[str, tuple]:
+    required = {"oh5_mask_start", "oh3_mask_start"}
+    if not required <= set(parts_df.columns):
+        raise ValueError(
+            "parts table lacks GRASP overhang coordinates; re-import the profile"
+        )
     return {
         str(row.part_id): (
             clean_dna(row.oligo_prefix),
             clean_dna(row.oligo_suffix),
+            int(row.oh5_mask_start),
+            int(row.oh3_mask_start),
         )
         for row in parts_df.itertuples(index=False)
     }
@@ -33,7 +46,21 @@ def write_overhangs_into_parts(
     parts_df: pd.DataFrame,
     selection: Dict[str, str],
     junction_map: pd.DataFrame,
+    *,
+    config: Optional[Mapping] = None,
+    codon_data: Optional[Mapping] = None,
 ) -> pd.DataFrame:
+    cut_mode = str(
+        (config or {}).get("overhang_redesign", {}).get("cut_mode", "native_fixed")
+    ).strip().lower()
+    if cut_mode == "movable_arelf":
+        return materialize_arelf_parts(
+            parts_df,
+            selection,
+            config=config,
+            codon_data=codon_data,
+        )
+
     updated = parts_df.copy()
     mask_by_id = {
         row.part_id: clean_mask(row.coding_mask)
@@ -74,7 +101,13 @@ def make_cds_optimizer(
         local_config = copy.deepcopy(config)
         if greedy:
             local_config["optimizer"]["iterations_per_part"] = 0
-        updated_parts = write_overhangs_into_parts(parts_df, selection, junction_map)
+        updated_parts = write_overhangs_into_parts(
+            parts_df,
+            selection,
+            junction_map,
+            config=local_config,
+            codon_data=codon_data,
+        )
         cds_by_part, aa_by_part = {}, {}
         for row in updated_parts.itertuples(index=False):
             aa = str(row.aa_sequence).upper().replace(" ", "")
@@ -86,6 +119,17 @@ def make_cds_optimizer(
             )
             cds_by_part[row.part_id] = sequence
             aa_by_part[row.part_id] = aa
+        if str(
+            local_config.get("overhang_redesign", {}).get(
+                "cut_mode", "native_fixed"
+            )
+        ).strip().lower() == "movable_arelf":
+            return (
+                cds_by_part,
+                aa_by_part,
+                flanks_from_parts(updated_parts),
+                dynamic_junction_map(updated_parts),
+            )
         return cds_by_part, aa_by_part
 
     return optimize_cds_for_masks
@@ -108,7 +152,7 @@ def run_overhang_redesign(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if not config.get("overhang_redesign", {}).get("enabled", True):
+    if not config.get("overhang_redesign", {}).get("enabled", False):
         log("Overhang redesign disabled — returning parts unchanged.")
         return pd.DataFrame(), {}, parts
 
@@ -117,10 +161,25 @@ def run_overhang_redesign(
     if not codon_data:
         raise ValueError("codon_data empty — Apply codon table first")
 
-    candidate_file = input_dir / "overhang_candidates.csv"
     junction_map_file = input_dir / "junction_map.csv"
-    overhang_candidates = pd.read_csv(candidate_file)
     junction_map = pd.read_csv(junction_map_file)
+    redesign_cfg = config.get("overhang_redesign", {})
+    movable_arelf = (
+        str(redesign_cfg.get("cut_mode", "native_fixed")).strip().lower()
+        == "movable_arelf"
+    )
+    if movable_arelf:
+        offsets = redesign_cfg.get("allowed_arelf_offsets_nt", range(12))
+        overhang_candidates = build_arelf_candidates(
+            codon_data,
+            offsets=offsets,
+        )
+        overhang_candidates.to_csv(
+            output_dir / "arelf_overhang_candidates.csv", index=False
+        )
+    else:
+        candidate_file = input_dir / "overhang_candidates.csv"
+        overhang_candidates = pd.read_csv(candidate_file)
 
     missing = sorted(set(junction_map["part_id"]) - set(parts["part_id"]))
     if missing:
@@ -182,7 +241,13 @@ def run_overhang_redesign(
         f"synthesis={chosen['synthesis']:.4f}"
     )
 
-    updated = write_overhangs_into_parts(parts, selected, junction_map)
+    updated = write_overhangs_into_parts(
+        parts,
+        selected,
+        junction_map,
+        config=config,
+        codon_data=codon_data,
+    )
     front.to_csv(output_dir / "pareto_front.csv", index=False)
     pd.DataFrame([chosen]).to_csv(output_dir / "selected_overhangs.csv", index=False)
     updated.to_csv(output_dir / "parts_with_redesigned_junctions.csv", index=False)
@@ -233,6 +298,32 @@ def run_library_optimize(
     versions = config["optimizer"]["orthogonal_versions_per_part"]
     log(f"Annealing {n} parts × {versions} version(s) × {iters:,} iters…")
     library = optimize_library(parts, codon_data, config)
+    # Preserve dynamic cut coordinates with each optimized version.  These are
+    # required to release order fragments and reconstruct assembled binders when
+    # ARELF cut positions differ from the deposited GenBank coordinates.
+    coordinate_columns = [
+        column
+        for column in (
+            "oh5",
+            "oh3",
+            "oh5_mask_start",
+            "oh3_mask_start",
+            "oh5_junction",
+            "oh3_junction",
+            "oh5_arelf_offset_nt",
+            "oh3_arelf_offset_nt",
+            "cut_mode",
+            "full_window_start_nt",
+            "full_window_end_nt",
+        )
+        if column in parts.columns
+    ]
+    if coordinate_columns:
+        metadata = parts[["part_id", *coordinate_columns]].drop_duplicates("part_id")
+        stale = [column for column in coordinate_columns if column in library.columns]
+        if stale:
+            library = library.drop(columns=stale)
+        library = library.merge(metadata, on="part_id", how="left", validate="many_to_one")
     out = output_dir / "optimized_library.csv"
     library.to_csv(out, index=False)
     fasta = write_oligo_fasta(library, output_dir / "optimized_grasp_oligos.fasta")
@@ -252,6 +343,19 @@ def _cds_maps_from_library(library: pd.DataFrame) -> Tuple[Dict[str, str], Dict[
         cds_by_part[pid] = clean_dna(row.optimized_cds)
         aa_by_part[pid] = str(row.aa_sequence).upper().replace(" ", "")
     return cds_by_part, aa_by_part
+
+
+def _unpack_cds_optimization(result, fallback_flanks, fallback_junction_map):
+    """Normalize fixed-cut and movable-cut optimizer callback results."""
+    if len(result) == 2:
+        cds_by_part, aa_by_part = result
+        return cds_by_part, aa_by_part, fallback_flanks, fallback_junction_map
+    if len(result) == 4:
+        return result
+    raise ValueError(
+        "CDS optimizer must return (cds, aa) or "
+        "(cds, aa, dynamic_flanks, dynamic_junction_map)"
+    )
 
 
 def rescore_pareto_front_after_anneal(
@@ -325,6 +429,11 @@ def rescore_pareto_front_after_anneal(
     full_anneal_scores = None
     if annealed_key is not None:
         cds_by_part, aa_by_part = _cds_maps_from_library(optimized_library)
+        annealed_flanks = (
+            flanks_from_parts(optimized_library)
+            if {"oh5_mask_start", "oh3_mask_start"} <= set(optimized_library.columns)
+            else flanks
+        )
         oligos_by_part = None
         if "oligo_sequence_5to3" in optimized_library.columns:
             oligos_by_part = {}
@@ -334,11 +443,13 @@ def rescore_pareto_front_after_anneal(
                     continue
                 oligos_by_part[pid] = clean_dna(lib_row.oligo_sequence_5to3)
         if oligos_by_part is None:
-            oligos_by_part = build_oligos_from_cds(cds_by_part, flanks)
+            oligos_by_part = build_oligos_from_cds(
+                cds_by_part, annealed_flanks, config=config
+            )
         part_ids = sorted(cds_by_part)
         sel = parse_overhang_selection(annealed_key)
         full_anneal_scores = evaluate_design(
-            overhangs=list(sel.values()),
+            overhangs=selection_overhangs(sel),
             cds_sequences=[cds_by_part[p] for p in part_ids],
             aa_sequences=[aa_by_part[p] for p in part_ids],
             codon_data=codon_data,
@@ -347,7 +458,7 @@ def rescore_pareto_front_after_anneal(
             cds_by_part=cds_by_part,
             aa_by_part=aa_by_part,
             oligos_by_part=oligos_by_part,
-            flanks_by_part=flanks,
+            flanks_by_part=annealed_flanks,
             junction_map=junction_map,
         )
 
@@ -363,15 +474,21 @@ def rescore_pareto_front_after_anneal(
 
         if deep_all and deep_optimize is not None:
             log(f"[{i}/{n}] Full-anneal scoring overhang set…")
-            cds_by_part, aa_by_part = deep_optimize(selection)
+            optimized = deep_optimize(selection)
         else:
             log(f"[{i}/{n}] Scoring overhang set (greedy CDS + full oligo)…")
-            cds_by_part, aa_by_part = greedy_optimize(selection)
+            optimized = greedy_optimize(selection)
 
-        oligos_by_part = build_oligos_from_cds(cds_by_part, flanks)
+        cds_by_part, aa_by_part, point_flanks, point_junction_map = (
+            _unpack_cds_optimization(optimized, flanks, junction_map)
+        )
+
+        oligos_by_part = build_oligos_from_cds(
+            cds_by_part, point_flanks, config=config
+        )
         part_ids = sorted(cds_by_part)
         scores = evaluate_design(
-            overhangs=list(selection.values()),
+            overhangs=selection_overhangs(selection),
             cds_sequences=[cds_by_part[p] for p in part_ids],
             aa_sequences=[aa_by_part[p] for p in part_ids],
             codon_data=codon_data,
@@ -380,8 +497,8 @@ def rescore_pareto_front_after_anneal(
             cds_by_part=cds_by_part,
             aa_by_part=aa_by_part,
             oligos_by_part=oligos_by_part,
-            flanks_by_part=flanks,
-            junction_map=junction_map,
+            flanks_by_part=point_flanks,
+            junction_map=point_junction_map,
         )
         entry = {
             "overhangs": overhangs_text,
@@ -446,6 +563,8 @@ def load_and_validate_parts(path: Path | str) -> pd.DataFrame:
         "coding_mask",
         "oligo_prefix",
         "oligo_suffix",
+        "oh5_mask_start",
+        "oh3_mask_start",
     }
     missing = required - set(parts.columns)
     if missing:
@@ -476,9 +595,14 @@ def ensure_grasp_imported(
     """Import GenBank profile into input/, or reuse cached CSVs."""
     input_dir = Path(input_dir)
     parts_path = input_dir / "parts.csv"
+    cached_text = parts_path.read_text() if parts_path.exists() else ""
+    cached_lines = cached_text.splitlines()
+    cached_header = cached_lines[0] if cached_lines else ""
     cached_ok = (
         parts_path.exists()
-        and "REPLACE" not in parts_path.read_text()[:500]
+        and "REPLACE" not in cached_text[:500]
+        and "oh5_mask_start" in cached_header
+        and "oh3_mask_start" in cached_header
         and (input_dir / "junction_map.csv").exists()
         and (input_dir / "overhang_candidates.csv").exists()
     )
@@ -567,9 +691,16 @@ def compile_and_assemble_target(
         nterm_overhang=nterm_overhang,
     )
     parts_full = None
-    parts_full_path = input_dir / "parts_full.csv"
-    if parts_full_path.exists():
-        parts_full = pd.read_csv(parts_full_path)
+    if {"part_id", "oh5_mask_start", "oh3_mask_start"} <= set(
+        optimized_library.columns
+    ):
+        # Movable ARELF cuts travel with the optimized library.  Prefer those
+        # coordinates over the fixed GenBank profile used as the import source.
+        parts_full = optimized_library.drop_duplicates("part_id").copy()
+    else:
+        parts_full_path = input_dir / "parts_full.csv"
+        if parts_full_path.exists():
+            parts_full = pd.read_csv(parts_full_path)
 
     assembled = simulate_assembled_cds(
         plan,

@@ -46,6 +46,8 @@ SYNTHESIS_VENDORS: Dict[str, Dict[str, Any]] = {
             "Homopolymers must be < 14 bp (Twist hard rule)",
             "Do not include CcdB toxin sequences",
         ],
+        "machine_hard_constraints": {"max_homopolymer": 13},
+        "manual_review_rules": ["Do not include CcdB toxin sequences"],
     },
     "Twist · Standard gene guidelines": {
         "vendor": "Twist Bioscience",
@@ -74,6 +76,8 @@ SYNTHESIS_VENDORS: Dict[str, Dict[str, Any]] = {
             "Homopolymers must be < 14 bp (Twist hard rule)",
             "Do not include CcdB toxin sequences",
         ],
+        "machine_hard_constraints": {"max_homopolymer": 13},
+        "manual_review_rules": ["Do not include CcdB toxin sequences"],
     },
     "Twist · Complex Genes tolerant": {
         "vendor": "Twist Bioscience",
@@ -102,6 +106,11 @@ SYNTHESIS_VENDORS: Dict[str, Dict[str, Any]] = {
             "Still avoid features outside Complex Genes envelope",
             "Do not include CcdB toxin sequences",
         ],
+        "machine_hard_constraints": {"max_homopolymer": 30},
+        "manual_review_rules": [
+            "Review features outside the Complex Genes envelope",
+            "Do not include CcdB toxin sequences",
+        ],
     },
     "IDT · gBlocks / eBlocks conservative": {
         "vendor": "IDT",
@@ -127,6 +136,8 @@ SYNTHESIS_VENDORS: Dict[str, Dict[str, Any]] = {
             "max_gene_length": 3000,
         },
         "hard_rules": [],
+        "machine_hard_constraints": {},
+        "manual_review_rules": [],
     },
     "Generic · conservative (default)": {
         "vendor": "Generic",
@@ -148,6 +159,8 @@ SYNTHESIS_VENDORS: Dict[str, Dict[str, Any]] = {
             "max_gene_length": 5000,
         },
         "hard_rules": [],
+        "machine_hard_constraints": {},
+        "manual_review_rules": [],
     },
     "Custom (keep current CONFIG)": {
         "vendor": "Custom",
@@ -156,6 +169,8 @@ SYNTHESIS_VENDORS: Dict[str, Dict[str, Any]] = {
         "notes": "Does not overwrite synthesis parameters in CONFIG.",
         "synthesis": None,
         "hard_rules": [],
+        "machine_hard_constraints": {},
+        "manual_review_rules": [],
     },
 }
 
@@ -174,25 +189,124 @@ ASSEMBLY_ENZYMES: Dict[str, Dict[str, str]] = {
 }
 
 
+_POTAPOV_DATA_URL = (
+    "https://acs.figshare.com/articles/dataset/"
+    "Comprehensive_Profiling_of_Four_Base_Overhang_Ligation_Fidelity_by_"
+    "T4_DNA_Ligase_and_Application_to_DNA_Assembly/7267505"
+)
+_PRYOR_ARTICLE_URL = (
+    "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0238592"
+)
+
+
+def _potapov_static(temperature: int, hours: int, table: str | None) -> Dict[str, Any]:
+    return {
+        "temperature": temperature,
+        "hours": hours,
+        "table": table,
+        "assay_kind": "static_ligation",
+        "overhang_length": 4,
+        "ligase": "T4 DNA Ligase",
+        "restriction_enzyme": None,
+        "buffer": "1x T4 DNA Ligase Reaction Buffer",
+        "cycles": None,
+        "steps": [{"temperature_c": temperature, "hours": hours}],
+        "terminal_step": None,
+        "source_doi": "10.1021/acssynbio.8b00333",
+        "source_url": _POTAPOV_DATA_URL,
+        "grasp_status": "surrogate",
+        "notes": (
+            "T4-ligase-only endpoint matrix. Potapov et al. showed that the "
+            "25 C/18 h dataset approximately predicts a typical 37/16 C "
+            "Golden Gate cycling protocol; it is not a measured 16 C matrix."
+        ),
+    }
+
+
+def _pryor_cycling(
+    *, table: str, restriction_enzyme: str, supplement_url: str, proxy_for: str
+) -> Dict[str, Any]:
+    return {
+        # Static temperature/time fields are deliberately unset: this is a
+        # whole Golden Gate cycling assay, not a constant-temperature matrix.
+        "temperature": None,
+        "hours": None,
+        "table": table,
+        "assay_kind": "golden_gate_cycling",
+        "overhang_length": 4,
+        "ligase": "T4 DNA Ligase",
+        "restriction_enzyme": restriction_enzyme,
+        "buffer": "see Pryor et al. 2020 Methods for enzyme-specific formulation",
+        "cycles": 30,
+        "steps": [
+            {"temperature_c": 37, "minutes": 5},
+            {"temperature_c": 16, "minutes": 5},
+        ],
+        "terminal_step": {"temperature_c": 60, "minutes": 5},
+        "source_doi": "10.1371/journal.pone.0238592",
+        "source_url": supplement_url,
+        "article_url": _PRYOR_ARTICLE_URL,
+        "grasp_status": "proxy",
+        "proxy_for": proxy_for,
+        "grasp_reference_protocol": {
+            "initial_step": {"temperature_c": 37, "seconds": 20},
+            "cycles": 26,
+            "steps": [
+                {"temperature_c": 37, "minutes": 3},
+                {"temperature_c": 16, "minutes": 4},
+            ],
+            "terminal_steps": [
+                {"temperature_c": 50, "minutes": 5},
+                {"temperature_c": 80, "minutes": 5},
+            ],
+            "source_url": (
+                "https://academic.oup.com/nar/article/53/20/gkaf1169/8321212"
+            ),
+        },
+        "notes": (
+            "Measured endpoint matrix for the complete 30-cycle reaction. "
+            "GRASP used 26 cycles of 3 min at 37 C and 4 min at 16 C with "
+            "different enzyme amounts/formulation, so this is a proxy rather "
+            "than an exact prediction of the GRASP experiment."
+        ),
+    }
+
+
 LIGATION_TABLES: Dict[str, Dict[str, Any]] = {
-    "T4 · 18 h · 25 °C (Potapov)": {"temperature": 25, "hours": 18, "table": None},
-    "T4 · 18 h · 37 °C (Potapov)": {"temperature": 37, "hours": 18, "table": None},
-    "T4 · 1 h · 25 °C (Potapov)": {"temperature": 25, "hours": 1, "table": None},
-    "BsaI-HFv2 · constant 37 °C": {
-        "temperature": 37,
-        "hours": 18,
-        "table": "BsaI-HFv2_T4_constant_37.csv",
-    },
-    "BsmBI-v2 · constant 42 °C": {
-        "temperature": 42,
-        "hours": 18,
-        "table": "BsmBI-v2_T4_constant_42.csv",
-    },
-    "SapI": {
-        "temperature": 25,
-        "hours": 18,
-        "table": "SapI.csv",
-    },
+    "GRASP Level 0 proxy · BbsI-HF + T4 · 37↔16 °C cycling (Pryor 2020)": (
+        _pryor_cycling(
+            table="BbsI-HF.csv",
+            restriction_enzyme="BbsI-HF",
+            supplement_url=(
+                "https://journals.plos.org/plosone/article/file?id="
+                "10.1371/journal.pone.0238592.s004&type=supplementary"
+            ),
+            proxy_for="GRASP Level 0 Thermo Fisher BpiI + T4 DNA Ligase",
+        )
+    ),
+    "GRASP Level 1 proxy · BsaI-HFv2 + T4 · 37↔16 °C cycling (Pryor 2020)": (
+        _pryor_cycling(
+            table="BsaI-HFv2.csv",
+            restriction_enzyme="BsaI-HFv2",
+            supplement_url=(
+                "https://journals.plos.org/plosone/article/file?id="
+                "10.1371/journal.pone.0238592.s001&type=supplementary"
+            ),
+            proxy_for="GRASP Level 1 BsaI + T4 DNA Ligase",
+        )
+    ),
+    "T4 ligase only · 18 h · 25 °C (Potapov 2018; validated cycling proxy)": (
+        _potapov_static(25, 18, None)
+    ),
+    "T4 ligase only · 1 h · 25 °C (Potapov 2018)": _potapov_static(
+        25, 1, None
+    ),
+    "T4 ligase only · 1 h · 37 °C (Potapov 2018)": _potapov_static(
+        37, 1, "FileS_T4_01h_37C.csv"
+    ),
+    "T4 ligase only · 18 h · 37 °C (Potapov 2018)": _potapov_static(
+        37, 18, None
+    ),
 }
 
 
@@ -219,6 +333,8 @@ def apply_vendor_to_config(config: Dict[str, Any], vendor_name: str) -> Dict[str
         "url": profile["url"],
         "notes": profile["notes"],
         "hard_rules": profile["hard_rules"],
+        "machine_hard_constraints": profile["machine_hard_constraints"],
+        "manual_review_rules": profile["manual_review_rules"],
     }
     if profile["synthesis"] is not None:
         # Keep unknown keys; overwrite known synthesis constraints
@@ -229,8 +345,20 @@ def apply_vendor_to_config(config: Dict[str, Any], vendor_name: str) -> Dict[str
 
 
 def apply_enzyme_to_config(config: Dict[str, Any], enzyme_name: str) -> Dict[str, Any]:
+    """Select internal-site domestication rules without changing cloning flanks.
+
+    Existing GRASP modules and vectors have fixed Type IIS architecture. This
+    selector therefore controls only which internal recognition sites are
+    forbidden during sequence optimization; it must not imply that orderable
+    flanks or destination vectors have been converted to a different enzyme.
+    """
     updated = deepcopy(config)
+    if enzyme_name not in ASSEMBLY_ENZYMES:
+        raise ValueError(f"Unknown domestication enzyme filter: {enzyme_name!r}")
     updated["assembly_enzyme"] = enzyme_name
+    updated["domestication_enzyme_filter"] = enzyme_name
+    updated["assembly_enzyme_semantics"] = "internal_site_filter_only"
+    updated["assembly_flanks_modified"] = False
     updated["forbidden_sites"] = dict(ASSEMBLY_ENZYMES[enzyme_name])
     return updated
 
@@ -245,6 +373,11 @@ def apply_ligation_table_to_config(
     lig["hours"] = meta["hours"]
     lig["table_name"] = table_name
     lig["ligation_table"] = meta["table"]
+    lig["protocol_metadata"] = {
+        key: deepcopy(value)
+        for key, value in meta.items()
+        if key not in {"temperature", "hours", "table"}
+    }
     updated["ligation"] = lig
     return updated
 

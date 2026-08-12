@@ -63,6 +63,44 @@ def build_default_config(input_dir: Path) -> Dict[str, Any]:
         "genetic_code": 1,
         "architecture": "9S",
         "nterm_overhang": "AGGT",
+        "assembly_interfaces": {
+            "overhang_notation": "directional_terminal_5p",
+            "level_minus1_entry": {
+                "profile": "custom",
+                "vector_name": "Custom Level -1 entry vector",
+                "enzyme": "BsaI",
+                "n_terminal_overhang": "AACA",
+                "c_terminal_overhang": "GGAG",
+            },
+            "level0": {
+                "acceptor_name": "Custom Level 0 acceptor",
+                "release_enzyme": "BpiI / BbsI",
+                "acceptor_n_terminal_overhang": "CTCA",
+                "acceptor_c_terminal_overhang": "CGAG",
+                "block_junctions": {
+                    "cds1_to_cds14": {
+                        "upstream_c": "GTGA",
+                        "downstream_n": "TCAC",
+                        "arelf_offset_nt": 4,
+                    },
+                    "cds14_to_cds19": {
+                        "upstream_c": "CACG",
+                        "downstream_n": "CGTG",
+                        "arelf_offset_nt": 1,
+                    },
+                    "cds1_to_cds2": {
+                        "upstream_c": "CTTC",
+                        "downstream_n": "GAAG",
+                        "arelf_offset_nt": 11,
+                    },
+                },
+            },
+            "level1": {
+                "acceptor_name": "Custom Level 1 acceptor",
+                "n_terminal_overhang": "GCCC",
+                "c_terminal_overhang": "GCGA",
+            },
+        },
         "assembly_enzyme": "GRASP default · BsaI + BpiI + BsmBI",
         "synthesis_vendor": "Twist · Standard gene guidelines",
         "codon_usage_file": input_dir / "codon_usage.csv",
@@ -103,14 +141,23 @@ def build_default_config(input_dir: Path) -> Dict[str, Any]:
             "orthogonal_versions_per_part": 1,
         },
         "ligation": {
-            "temperature": 25,
-            "hours": 18,
+            # A cycling matrix is not a constant-temperature/time assay.
+            "temperature": None,
+            "hours": None,
             "min_efficiency": 0.25,
             "min_fidelity": 0.9,
-            "table_name": "T4 · 18 h · 25 °C (Potapov)",
-            "ligation_table": None,
+            "table_name": (
+                "GRASP Level 0 proxy · BbsI-HF + T4 · "
+                "37↔16 °C cycling (Pryor 2020)"
+            ),
+            "ligation_table": "BbsI-HF.csv",
         },
-        "overhang_redesign": {"enabled": True, "selection": "knee"},
+        "overhang_redesign": {
+            "enabled": False,
+            "selection": "knee",
+            "cut_mode": "movable_arelf",
+            "allowed_arelf_offsets_nt": list(range(12)),
+        },
         # Pareto CDS scoring uses greedy (0 iters). Keep evaluations modest.
         "pareto": {
             "max_evaluations": 40,
@@ -143,6 +190,15 @@ class GraspControlPanel:
         self._build_widgets()
 
     def _build_widgets(self) -> None:
+        assembly = self.config.get("assembly_interfaces", {})
+        entry = assembly.get("level_minus1_entry", {})
+        level0 = assembly.get("level0", {})
+        level1 = assembly.get("level1", {})
+        block_junctions = level0.get("block_junctions", {})
+
+        def _junction(name: str, key: str, default):
+            return block_junctions.get(name, {}).get(key, default)
+
         self.organism = widgets.Dropdown(
             options=sample_names(),
             value="Escherichia coli (Kazusa)",
@@ -189,13 +245,15 @@ class GraspControlPanel:
             value=self.config.get(
                 "assembly_enzyme", "GRASP default · BsaI + BpiI + BsmBI"
             ),
-            description="Assembly enzyme",
+            description="Internal-site filter",
             **_DD_WIDE,
         )
         self.ligation = widgets.Dropdown(
             options=ligation_table_names(),
             value=self.config.get("ligation", {}).get(
-                "table_name", "T4 · 18 h · 25 °C (Potapov)"
+                "table_name",
+                "GRASP Level 0 proxy · BbsI-HF + T4 · "
+                "37↔16 °C cycling (Pryor 2020)",
             ),
             description="Ligation table",
             **_DD_WIDE,
@@ -218,10 +276,10 @@ class GraspControlPanel:
         )
         self.redesign = widgets.Dropdown(
             options=[
-                ("On — Pareto redesign at fixed cuts", True),
+                ("On — explore synonymous cuts within ARELF", True),
                 ("Off — keep native GRASP overhangs", False),
             ],
-            value=bool(self.config.get("overhang_redesign", {}).get("enabled", True)),
+            value=bool(self.config.get("overhang_redesign", {}).get("enabled", False)),
             description="Overhang redesign",
             **_DD_WIDE,
         )
@@ -245,6 +303,120 @@ class GraspControlPanel:
             value=str(self.config.get("target_rna", "UUACACGUG")),
             description="Target RNA",
             placeholder="e.g. UUACACGUG",
+            **_DD,
+        )
+        profile_value = str(entry.get("profile", "custom"))
+        if profile_value not in {"custom", "deposited_grasp"}:
+            profile_value = "custom"
+        self.interface_preset = widgets.Dropdown(
+            options=[
+                ("Custom editable interfaces (default)", "custom"),
+                ("Deposited GRASP · pAGM1311 → pAGM9121", "deposited_grasp"),
+            ],
+            value=profile_value,
+            description="Vector preset",
+            **_DD_WIDE,
+        )
+        self.entry_vector_name = widgets.Text(
+            value=str(entry.get("vector_name", "Custom Level -1 entry vector")),
+            description="Level -1 vector",
+            **_DD_WIDE,
+        )
+        self.entry_n = widgets.Text(
+            value=str(entry.get("n_terminal_overhang", "AACA")),
+            description="Entry N overhang",
+            **_DD,
+        )
+        self.entry_c = widgets.Text(
+            value=str(entry.get("c_terminal_overhang", "GGAG")),
+            description="Entry C overhang",
+            **_DD,
+        )
+        self.level0_acceptor_name = widgets.Text(
+            value=str(level0.get("acceptor_name", "Custom Level 0 acceptor")),
+            description="Level 0 acceptor",
+            **_DD_WIDE,
+        )
+        self.level0_acceptor_n = widgets.Text(
+            value=str(level0.get("acceptor_n_terminal_overhang", "CTCA")),
+            description="L0 acceptor N",
+            **_DD,
+        )
+        self.level0_acceptor_c = widgets.Text(
+            value=str(level0.get("acceptor_c_terminal_overhang", "CGAG")),
+            description="L0 acceptor C",
+            **_DD,
+        )
+        self.cds1_c = widgets.Text(
+            value=str(_junction("cds1_to_cds2", "upstream_c", "CTTC")),
+            description="CDS1 C overhang",
+            **_DD,
+        )
+        self.cds2_n = widgets.Text(
+            value=str(_junction("cds1_to_cds2", "downstream_n", "GAAG")),
+            description="CDS2 N overhang",
+            **_DD,
+        )
+        self.cds1_c_offset = widgets.IntSlider(
+            value=int(_junction("cds1_to_cds2", "arelf_offset_nt", 11)),
+            min=0,
+            max=11,
+            step=1,
+            description="CDS1/2 ARELF cut",
+            continuous_update=False,
+            **_DD_WIDE,
+        )
+        self.cds1_14_c = widgets.Text(
+            value=str(_junction("cds1_to_cds14", "upstream_c", "GTGA")),
+            description="CDS1→14 C",
+            **_DD,
+        )
+        self.cds14_n = widgets.Text(
+            value=str(_junction("cds1_to_cds14", "downstream_n", "TCAC")),
+            description="CDS14 N",
+            **_DD,
+        )
+        self.cds1_14_offset = widgets.IntSlider(
+            value=int(_junction("cds1_to_cds14", "arelf_offset_nt", 4)),
+            min=0,
+            max=11,
+            step=1,
+            description="CDS1/14 ARELF cut",
+            continuous_update=False,
+            **_DD_WIDE,
+        )
+        self.cds14_19_c = widgets.Text(
+            value=str(_junction("cds14_to_cds19", "upstream_c", "CACG")),
+            description="CDS14→19 C",
+            **_DD,
+        )
+        self.cds19_n = widgets.Text(
+            value=str(_junction("cds14_to_cds19", "downstream_n", "CGTG")),
+            description="CDS19 N",
+            **_DD,
+        )
+        self.cds14_19_offset = widgets.IntSlider(
+            value=int(_junction("cds14_to_cds19", "arelf_offset_nt", 1)),
+            min=0,
+            max=11,
+            step=1,
+            description="CDS14/19 ARELF cut",
+            continuous_update=False,
+            **_DD_WIDE,
+        )
+        self.level1_acceptor_name = widgets.Text(
+            value=str(level1.get("acceptor_name", "Custom Level 1 acceptor")),
+            description="Level 1 acceptor",
+            **_DD_WIDE,
+        )
+        self.level1_n = widgets.Text(
+            value=str(level1.get("n_terminal_overhang", "GCCC")),
+            description="Cassette N overhang",
+            **_DD,
+        )
+        self.level1_c = widgets.Text(
+            value=str(level1.get("c_terminal_overhang", "GCGA")),
+            description="Cassette C overhang",
             **_DD,
         )
         self.apply_btn = widgets.Button(
@@ -274,6 +446,9 @@ class GraspControlPanel:
         self.organism.observe(self._on_organism_change, names="value")
         self.kazusa_id.on_submit(lambda _: self.apply())
         self.upload.observe(self._on_upload_change, names="value")
+        self.interface_preset.observe(
+            self._on_interface_preset_change, names="value"
+        )
         # Auto-apply on change — button clicks are unreliable in Cursor
         for w in (
             self.genetic_code,
@@ -285,6 +460,9 @@ class GraspControlPanel:
             self.redesign,
             self.selection,
             self.depth,
+            self.cds1_c_offset,
+            self.cds1_14_offset,
+            self.cds14_19_offset,
         ):
             w.observe(self._on_setting_change, names="value")
         self.target_rna.on_submit(lambda _: self.apply())
@@ -306,6 +484,54 @@ class GraspControlPanel:
         if self.organism.value != UPLOAD_OWN_TABLE:
             self.organism.value = UPLOAD_OWN_TABLE
             return
+        self.apply()
+
+    def _on_interface_preset_change(self, change=None) -> None:
+        if self._applying or not change or change.get("name") != "value":
+            return
+        if change.get("old") == change.get("new"):
+            return
+        from .assembly_interfaces import resolve_assembly_interfaces
+
+        profile = resolve_assembly_interfaces(preset=str(change["new"]))
+        entry = profile["level_minus1_entry"]
+        level0 = profile["level0"]
+        final = profile["final_cassette"]
+        outer = level0.get("acceptor_outer") or {
+            "n_overhang_5p": "CTCA",
+            "c_overhang_5p": "CGAG",
+        }
+        self._applying = True
+        try:
+            self.entry_vector_name.value = entry["vector_id"]
+            self.entry_n.value = entry["n_overhang_5p"]
+            self.entry_c.value = entry["c_overhang_5p"]
+            self.level0_acceptor_name.value = level0["acceptor_id"]
+            self.level0_acceptor_n.value = outer["n_overhang_5p"]
+            self.level0_acceptor_c.value = outer["c_overhang_5p"]
+            self.cds1_c.value = profile["junctions"]["terminal_to_cds2"][
+                "upstream_c_5p"
+            ]
+            self.cds2_n.value = profile["junctions"]["terminal_to_cds2"][
+                "downstream_n_5p"
+            ]
+            self.cds1_14_c.value = profile["junctions"]["cds1_to_cds14"][
+                "upstream_c_5p"
+            ]
+            self.cds14_n.value = profile["junctions"]["cds1_to_cds14"][
+                "downstream_n_5p"
+            ]
+            self.cds14_19_c.value = profile["junctions"]["cds14_to_cds19"][
+                "upstream_c_5p"
+            ]
+            self.cds19_n.value = profile["junctions"]["cds14_to_cds19"][
+                "downstream_n_5p"
+            ]
+            self.level1_acceptor_name.value = final["vector_id"]
+            self.level1_n.value = final["n_overhang_5p"]
+            self.level1_c.value = final["c_overhang_5p"]
+        finally:
+            self._applying = False
         self.apply()
 
     def widget(self) -> widgets.Widget:
@@ -338,6 +564,23 @@ class GraspControlPanel:
                 self.vendor,
                 self.enzyme,
                 self.ligation,
+                _label("Oligo → Level -1 entry (directional 5′ overhangs)"),
+                self.interface_preset,
+                self.entry_vector_name,
+                widgets.HBox([self.entry_n, self.entry_c]),
+                _label("Level -1 → Level 0 (BpiI release / acceptor)"),
+                self.level0_acceptor_name,
+                widgets.HBox([self.level0_acceptor_n, self.level0_acceptor_c]),
+                _label("Level 0 block junctions (C/N reverse-complement pairs)"),
+                widgets.HBox([self.cds1_c, self.cds2_n]),
+                self.cds1_c_offset,
+                widgets.HBox([self.cds1_14_c, self.cds14_n]),
+                self.cds1_14_offset,
+                widgets.HBox([self.cds14_19_c, self.cds19_n]),
+                self.cds14_19_offset,
+                _label("Resulting Level 1 cassette"),
+                self.level1_acceptor_name,
+                widgets.HBox([self.level1_n, self.level1_c]),
                 _label("Optimizer"),
                 self.redesign,
                 self.selection,
@@ -441,6 +684,24 @@ class GraspControlPanel:
     def _apply_impl(self) -> Dict[str, Any]:
         cfg = deepcopy(self.config)
 
+        def _overhang(widget: widgets.Text, label: str) -> str:
+            value = str(widget.value).strip().upper().replace("U", "T")
+            if len(value) != 4 or set(value) - set("ACGT"):
+                raise ValueError(f"{label} must be exactly four DNA bases (ACGT)")
+            return value
+
+        def _paired(upstream: widgets.Text, downstream: widgets.Text, label: str):
+            from .dna import reverse_complement
+
+            up = _overhang(upstream, f"{label} upstream C overhang")
+            down = _overhang(downstream, f"{label} downstream N overhang")
+            if reverse_complement(up) != down:
+                raise ValueError(
+                    f"{label}: directional terminal overhangs must be reverse "
+                    f"complements ({up} pairs with {reverse_complement(up)}, not {down})"
+                )
+            return up, down
+
         cfg = apply_vendor_to_config(cfg, self.vendor.value)
         cfg = apply_enzyme_to_config(cfg, self.enzyme.value)
         cfg = apply_ligation_table_to_config(cfg, self.ligation.value)
@@ -449,9 +710,90 @@ class GraspControlPanel:
         cfg["architecture"] = self.architecture.value
         cfg["nterm_overhang"] = "AGGT" if self.nterm.value.startswith("AGGT") else "AATG"
         cfg["target_rna"] = self.target_rna.value.strip().upper().replace("T", "U")
+        cds1_c, cds2_n = _paired(self.cds1_c, self.cds2_n, "CDS1→CDS2")
+        cds1_14_c, cds14_n = _paired(
+            self.cds1_14_c, self.cds14_n, "CDS1→CDS14"
+        )
+        cds14_19_c, cds19_n = _paired(
+            self.cds14_19_c, self.cds19_n, "CDS14→CDS19"
+        )
+        selected_profile = str(self.interface_preset.value)
+        if selected_profile == "deposited_grasp":
+            deposited_values = (
+                str(self.entry_vector_name.value).strip() == "pAGM1311"
+                and _overhang(self.entry_n, "Entry N overhang") == "ACAT"
+                and _overhang(self.entry_c, "Entry C overhang") == "ACAA"
+                and str(self.level0_acceptor_name.value).strip() == "pAGM9121"
+                and _overhang(self.level0_acceptor_n, "Level 0 N") == "CTCA"
+                and _overhang(self.level0_acceptor_c, "Level 0 C") == "CGAG"
+                and cds1_c == "CTTC"
+                and cds2_n == "GAAG"
+                and cds1_14_c == "GTGA"
+                and cds14_n == "TCAC"
+                and cds14_19_c == "CACG"
+                and cds19_n == "CGTG"
+                and str(self.level1_acceptor_name.value).strip()
+                == "modified_1-1R_pICH47802_lc_p15A_ori_"
+                and _overhang(self.level1_n, "Level 1 N") == "GGAG"
+                and _overhang(self.level1_c, "Level 1 C") == "CGCT"
+            )
+            if not deposited_values:
+                # Never retain deposited-vector completion contexts after the
+                # user changes an interface. The design becomes a custom vector.
+                selected_profile = "custom"
+                self.interface_preset.value = "custom"
+                print("▶ Edited deposited interfaces; switched vector preset to Custom")
+        cfg["assembly_interfaces"] = {
+            "overhang_notation": "directional_terminal_5p",
+            "level_minus1_entry": {
+                "profile": selected_profile,
+                "vector_name": str(self.entry_vector_name.value).strip(),
+                "enzyme": "BsaI",
+                "n_terminal_overhang": _overhang(self.entry_n, "Entry N overhang"),
+                "c_terminal_overhang": _overhang(self.entry_c, "Entry C overhang"),
+            },
+            "level0": {
+                "acceptor_name": str(self.level0_acceptor_name.value).strip(),
+                "release_enzyme": "BpiI / BbsI",
+                "acceptor_n_terminal_overhang": _overhang(
+                    self.level0_acceptor_n, "Level 0 acceptor N overhang"
+                ),
+                "acceptor_c_terminal_overhang": _overhang(
+                    self.level0_acceptor_c, "Level 0 acceptor C overhang"
+                ),
+                "block_junctions": {
+                    "cds1_to_cds14": {
+                        "upstream_c": cds1_14_c,
+                        "downstream_n": cds14_n,
+                        "arelf_offset_nt": int(self.cds1_14_offset.value),
+                    },
+                    "cds14_to_cds19": {
+                        "upstream_c": cds14_19_c,
+                        "downstream_n": cds19_n,
+                        "arelf_offset_nt": int(self.cds14_19_offset.value),
+                    },
+                    "cds1_to_cds2": {
+                        "upstream_c": cds1_c,
+                        "downstream_n": cds2_n,
+                        "arelf_offset_nt": int(self.cds1_c_offset.value),
+                    },
+                },
+            },
+            "level1": {
+                "acceptor_name": str(self.level1_acceptor_name.value).strip(),
+                "n_terminal_overhang": _overhang(
+                    self.level1_n, "Level 1 cassette N overhang"
+                ),
+                "c_terminal_overhang": _overhang(
+                    self.level1_c, "Level 1 cassette C overhang"
+                ),
+            },
+        }
         cfg["overhang_redesign"] = {
             "enabled": bool(self.redesign.value),
             "selection": self.selection.value,
+            "cut_mode": "movable_arelf",
+            "allowed_arelf_offsets_nt": list(range(12)),
         }
         cfg["optimizer"] = dict(cfg.get("optimizer", {}))
         cfg["optimizer"]["iterations_per_part"] = int(self.depth.value)
@@ -526,6 +868,23 @@ class GraspControlPanel:
                 else ""
             )
             synth = self.config["synthesis"]
+            ligation = self.config.get("ligation", {})
+            protocol = ligation.get("protocol_metadata", {})
+            grasp_protocol = protocol.get("grasp_reference_protocol", {})
+            if grasp_protocol:
+                cycle_steps = " / ".join(
+                    f"{step['temperature_c']} °C {step['minutes']} min"
+                    for step in grasp_protocol.get("steps", [])
+                )
+                protocol_html = (
+                    f"<br/>Ligation data: <b>{ligation.get('table_name')}</b><br/>"
+                    f"GRASP reference cycling: <b>{grasp_protocol.get('cycles')}×</b> "
+                    f"({cycle_steps}); fidelity matrix is a labelled Pryor proxy"
+                )
+            else:
+                protocol_html = (
+                    f"<br/>Ligation data: <b>{ligation.get('table_name')}</b>"
+                )
             body = (
                 f"<div style='font-size:10px;letter-spacing:0.12em;text-transform:uppercase;"
                 f"color:#0f6b4c;margin-bottom:4px'>Active host</div>"
@@ -541,6 +900,7 @@ class GraspControlPanel:
                 f"Cut sites: <b>"
                 f"{'KEEP native (AA risk check on)' if not self.config['overhang_redesign']['enabled'] else 'redesign ON (synonymous)'}"
                 f"</b> · depth <b>{self.config['optimizer']['iterations_per_part']:,}</b>"
+                f"{protocol_html}"
             )
             self._set_status(
                 body,

@@ -94,7 +94,7 @@ def search_cut_sites(
             if _valid_overhang_set(best_ohs)
             else -1.0
         )
-    except ValueError:
+    except (KeyError, ValueError):
         best_f = -1.0
 
     n_junc = len(base)
@@ -115,7 +115,7 @@ def search_cut_sites(
             continue
         try:
             f = fidelity.set_fidelity(ohs)
-        except ValueError:
+        except (KeyError, ValueError):
             continue
         if f > best_f:
             best_f = f

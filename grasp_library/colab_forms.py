@@ -25,8 +25,27 @@ def apply_form_settings(
     synthesis_vendor: str,
     assembly_enzyme: str,
     ligation_table: str,
-    overhang_redesign: bool = True,
+    overhang_redesign: bool = False,
     redesign_selection: str = "knee",
+    assembly_interface_preset: str = "custom",
+    entry_vector_name: str = "Custom Level -1 entry vector",
+    entry_n_overhang: str = "AACA",
+    entry_c_overhang: str = "GGAG",
+    level0_acceptor_name: str = "Custom Level 0 acceptor",
+    level0_acceptor_n_overhang: str = "CTCA",
+    level0_acceptor_c_overhang: str = "CGAG",
+    cds1_c_overhang: str = "CTTC",
+    cds2_n_overhang: str = "GAAG",
+    cds1_cds2_arelf_offset_nt: int = 11,
+    cds1_cds14_c_overhang: str = "GTGA",
+    cds14_n_overhang: str = "TCAC",
+    cds1_cds14_arelf_offset_nt: int = 4,
+    cds14_cds19_c_overhang: str = "CACG",
+    cds19_n_overhang: str = "CGTG",
+    cds14_cds19_arelf_offset_nt: int = 1,
+    level1_acceptor_name: str = "Custom Level 1 acceptor",
+    level1_n_overhang: str = "GCCC",
+    level1_c_overhang: str = "GCGA",
     optimize_depth: int = 2000,
     n_fragments: Optional[int] = None,
     kazusa_species_id: str = "",
@@ -45,17 +64,119 @@ def apply_form_settings(
     cfg["target_rna"] = str(target_rna).strip().upper().replace("T", "U")
     cfg["nterm_overhang"] = nterm_overhang
     cfg["architecture"] = architecture
+
+    from .dna import reverse_complement
+
+    def _overhang(value: str, label: str) -> str:
+        cleaned = str(value).strip().upper().replace("U", "T")
+        if len(cleaned) != 4 or set(cleaned) - set("ACGT"):
+            raise ValueError(f"{label} must be exactly four DNA bases (ACGT)")
+        return cleaned
+
+    def _pair(upstream: str, downstream: str, label: str):
+        up = _overhang(upstream, f"{label} upstream C overhang")
+        down = _overhang(downstream, f"{label} downstream N overhang")
+        if reverse_complement(up) != down:
+            raise ValueError(
+                f"{label}: directional terminal overhangs must be reverse "
+                f"complements ({up} pairs with {reverse_complement(up)}, not {down})"
+            )
+        return up, down
+
+    def _offset(value: int, label: str) -> int:
+        result = int(value)
+        if not 0 <= result <= 11:
+            raise ValueError(f"{label} must be between 0 and 11 within ARELF")
+        return result
+
+    cds1_c, cds2_n = _pair(cds1_c_overhang, cds2_n_overhang, "CDS1→CDS2")
+    cds1_14_c, cds14_n = _pair(
+        cds1_cds14_c_overhang, cds14_n_overhang, "CDS1→CDS14"
+    )
+    cds14_19_c, cds19_n = _pair(
+        cds14_cds19_c_overhang, cds19_n_overhang, "CDS14→CDS19"
+    )
+    cfg["assembly_interfaces"] = {
+        "overhang_notation": "directional_terminal_5p",
+        "level_minus1_entry": {
+            "profile": "custom",
+            "vector_name": str(entry_vector_name).strip(),
+            "enzyme": "BsaI",
+            "n_terminal_overhang": _overhang(
+                entry_n_overhang, "Entry N overhang"
+            ),
+            "c_terminal_overhang": _overhang(
+                entry_c_overhang, "Entry C overhang"
+            ),
+        },
+        "level0": {
+            "acceptor_name": str(level0_acceptor_name).strip(),
+            "release_enzyme": "BpiI / BbsI",
+            "acceptor_n_terminal_overhang": _overhang(
+                level0_acceptor_n_overhang, "Level 0 acceptor N overhang"
+            ),
+            "acceptor_c_terminal_overhang": _overhang(
+                level0_acceptor_c_overhang, "Level 0 acceptor C overhang"
+            ),
+            "block_junctions": {
+                "cds1_to_cds14": {
+                    "upstream_c": cds1_14_c,
+                    "downstream_n": cds14_n,
+                    "arelf_offset_nt": _offset(
+                        cds1_cds14_arelf_offset_nt, "CDS1→CDS14 ARELF offset"
+                    ),
+                },
+                "cds14_to_cds19": {
+                    "upstream_c": cds14_19_c,
+                    "downstream_n": cds19_n,
+                    "arelf_offset_nt": _offset(
+                        cds14_cds19_arelf_offset_nt, "CDS14→CDS19 ARELF offset"
+                    ),
+                },
+                "cds1_to_cds2": {
+                    "upstream_c": cds1_c,
+                    "downstream_n": cds2_n,
+                    "arelf_offset_nt": _offset(
+                        cds1_cds2_arelf_offset_nt, "CDS1→CDS2 ARELF offset"
+                    ),
+                },
+            },
+        },
+        "level1": {
+            "acceptor_name": str(level1_acceptor_name).strip(),
+            "n_terminal_overhang": _overhang(
+                level1_n_overhang, "Level 1 cassette N overhang"
+            ),
+            "c_terminal_overhang": _overhang(
+                level1_c_overhang, "Level 1 cassette C overhang"
+            ),
+        },
+    }
+    if str(assembly_interface_preset) == "deposited_grasp":
+        if nterm_overhang != "AGGT":
+            raise ValueError(
+                "The deposited GRASP preset requires the AGGT PPR N interface"
+            )
+        cfg["assembly_interfaces"] = {"preset": "deposited_grasp"}
+    elif str(assembly_interface_preset) != "custom":
+        raise ValueError(
+            "assembly_interface_preset must be 'custom' or 'deposited_grasp'"
+        )
     cfg["overhang_redesign"] = {
         "enabled": bool(overhang_redesign),
         "selection": redesign_selection,
+        "cut_mode": "movable_arelf",
+        "allowed_arelf_offsets_nt": list(range(12)),
     }
     cfg.setdefault("optimizer", {})
     cfg["optimizer"] = dict(cfg["optimizer"])
     cfg["optimizer"]["iterations_per_part"] = int(optimize_depth)
-    if n_fragments is not None and int(n_fragments) > 0:
-        cfg["oneshot_n_fragments"] = int(n_fragments)
-    else:
-        cfg.pop("oneshot_n_fragments", None)
+    if n_fragments is not None:
+        raise ValueError(
+            "GRASP uses fixed five-part BpiI assemblies; arbitrary one-shot "
+            "fragment counts are not supported"
+        )
+    cfg.pop("oneshot_n_fragments", None)
 
     cfg = apply_vendor_to_config(cfg, synthesis_vendor)
     cfg = apply_enzyme_to_config(cfg, assembly_enzyme)

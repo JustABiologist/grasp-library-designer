@@ -1,6 +1,20 @@
 """GRASP library designer: masked codon optimization with Pareto trade-offs."""
 
 from .ligation_fidelity import LigationFidelityCalculator
+from .assembly_interfaces import (
+    build_order_fragment,
+    custom_interface_preset,
+    deposited_grasp_interface_preset,
+    resolve_assembly_interfaces,
+    validate_assembly_interfaces,
+)
+from .arelf import (
+    ARELF_MOTIF,
+    ARELF_OFFSETS,
+    build_arelf_candidates,
+    materialize_arelf_parts,
+    parse_cut_token,
+)
 from .objectives import ObjectiveScores, evaluate_design
 from .pareto import (
     ParetoPoint,
@@ -91,10 +105,20 @@ try:
 
     __version__ = version("grasp-library-designer")
 except PackageNotFoundError:  # pragma: no cover - editable/source tree
-    __version__ = "0.1.5"
+    __version__ = "0.1.7"
 
 __all__ = [
     "LigationFidelityCalculator",
+    "build_order_fragment",
+    "custom_interface_preset",
+    "deposited_grasp_interface_preset",
+    "resolve_assembly_interfaces",
+    "validate_assembly_interfaces",
+    "ARELF_MOTIF",
+    "ARELF_OFFSETS",
+    "build_arelf_candidates",
+    "materialize_arelf_parts",
+    "parse_cut_token",
     "ObjectiveScores",
     "evaluate_design",
     "ParetoPoint",

@@ -1,32 +1,236 @@
-"""One-shot GRASP design: RNA → binder protein → free GGA cuts → oligos.
-
-No combinatorial library modules. The full binder CDS is codon/synthesis
-optimized, then cut sites are chosen so the overhangs already present in that
-DNA form a high-fidelity Golden Gate set.
-"""
+"""Target-specific GRASP order fragments and in-silico assembly checks."""
 
 from __future__ import annotations
 
+import copy
+import random
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+import numpy as np
 import pandas as pd
-from Bio.Seq import Seq
 
 from .binder import describe_binder, normalize_target_rna
-from .codon_validation import cds_matches_organism, verify_cds_for_organism
+from .arelf import materialize_arelf_parts
+from .assembly_interfaces import (
+    extract_order_payload,
+    resolve_assembly_interfaces,
+    reverse_complement,
+)
 from .dna import clean_dna
-from .gga_split import plan_gga_from_optimized_cds, suggest_fragment_count
-from .ligation_fidelity import LigationFidelityCalculator
-from .optimizer import optimize_coding_sequence, synthesis_qc
+from .import_grasp import (
+    build_parts_table,
+    compile_target_gap,
+    load_grasp_records,
+)
+from .optimizer import optimize_library, simulate_assembled_cds
+from .paths import bundled_profile_genbank
+
+
+ENTRY_CLONING_ENZYME = "BsaI"
+MODULE_RELEASE_ENZYME = "BpiI / BbsI"
 
 
 def sanitize_rna_name(target_rna: str) -> str:
     return normalize_target_rna(target_rna)
 
 
-DEFAULT_OLIGO_PREFIX = "ACATCTC"
-DEFAULT_OLIGO_SUFFIX = "TTGTCTTC"
+def validate_order_fragment_in_silico(
+    sequence: str, interfaces: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Check order-fragment geometry without claiming wet-lab/vector validation."""
+    sequence = clean_dna(sequence)
+    payload = extract_order_payload(sequence, interfaces)
+    entry = interfaces["level_minus1_entry"]
+    entry_insert = entry["n_overhang_5p"] + payload + reverse_complement(
+        entry["c_overhang_5p"]
+    )
+    context_5 = entry.get("completion_context_5p")
+    context_3 = entry.get("completion_context_3p")
+    release_site = entry.get("release_recognition_site")
+    context_available = bool(context_5 and context_3 and release_site)
+    cloned_context = (
+        clean_dna(context_5) + entry_insert + clean_dna(context_3)
+        if context_available
+        else ""
+    )
+    context_validated = bool(
+        context_available
+        and cloned_context.startswith(clean_dna(release_site))
+        and cloned_context.endswith(reverse_complement(clean_dna(release_site)))
+    )
+    if context_available and not context_validated:
+        raise ValueError("configured entry-vector context does not complete release sites")
+    return {
+        "assembly_interface_profile": interfaces["profile_name"],
+        "entry_insert_5to3": entry_insert,
+        "entry_insertion_overhang_5": entry_insert[:4],
+        "entry_insertion_overhang_3": entry_insert[-4:],
+        "cloned_entry_context_5to3": cloned_context,
+        "module_release_payload_5to3": payload,
+        "module_release_oh5": payload[:4],
+        "module_release_oh3": payload[-4:],
+        "order_fragment_requirements_checked": True,
+        "entry_interface_requirements_checked": True,
+        "entry_vector_context_in_silico_validated": context_validated,
+        "entry_vector_sequence_provided": bool(entry.get("vector_sequence")),
+        "entry_vector_sequence_in_silico_validated": False,
+        "module_release_requirements_checked": True,
+    }
+
+
+def validate_pagm1311_order_fragment(sequence: str) -> Dict[str, Any]:
+    """Backward-compatible deposited-preset validator.
+
+    New exports use the explicit ``*_requirements_checked`` and
+    ``*_in_silico_validated`` fields returned by the generic validator.
+    """
+    result = validate_order_fragment_in_silico(
+        sequence, resolve_assembly_interfaces(preset="deposited_grasp")
+    )
+    # Preserve historical sequence-field spellings for callers, not claims.
+    result["cloned_pagm1311_context_5to3"] = result["cloned_entry_context_5to3"]
+    result["bpii_release_payload_5to3"] = result["module_release_payload_5to3"]
+    result["bpii_release_oh5"] = result["module_release_oh5"]
+    result["bpii_release_oh3"] = result["module_release_oh3"]
+    return result
+
+
+def _validate_level0_groups(
+    plan: pd.DataFrame,
+    order_rows: pd.DataFrame,
+    interfaces: Dict[str, Any],
+) -> pd.DataFrame:
+    """Join every five-part block and check configured Level 0 requirements."""
+    by_id = order_rows.set_index("optimized_part_id")
+    rows = []
+    for group, group_plan in plan.groupby("assembly_group", sort=False):
+        group_plan = group_plan.sort_values("assembly_order")
+        payloads = []
+        part_ids = []
+        for row in group_plan.itertuples(index=False):
+            data = by_id.loc[str(row.optimized_part_id)]
+            payloads.append(str(data.module_release_payload_5to3))
+            part_ids.append(str(row.part_id))
+
+        if len(payloads) != 5:
+            raise AssertionError(f"{group}: expected five Level -1 modules")
+        outer = interfaces["level0"].get("acceptor_outer")
+        if outer is not None and payloads[0][:4] != outer["n_overhang_5p"]:
+            raise AssertionError(f"{group}: first module misses the Level 0 outer interface")
+        if outer is not None and payloads[-1][-4:] != outer["c_overhang_5p"]:
+            raise AssertionError(f"{group}: last module misses the Level 0 outer interface")
+        for left, right in zip(payloads, payloads[1:]):
+            if left[-4:] != right[:4]:
+                raise AssertionError(
+                    f"{group}: BpiI junction mismatch {left[-4:]} != {right[:4]}"
+                )
+
+        assembled = payloads[0] + "".join(payload[4:] for payload in payloads[1:])
+        block_insert = assembled[4:-4] if outer is not None else assembled
+        rows.append(
+            {
+                "assembly_group": group,
+                "level_minus1_parts": ";".join(part_ids),
+                "n_parts": len(part_ids),
+                "level0_outer_left_5to3": assembled[:4] if outer else "",
+                "level0_outer_right_5to3": assembled[-4:] if outer else "",
+                "ppr_block_5to3": block_insert,
+                "ppr_block_length": len(block_insert),
+                "level0_interface_requirements_checked": True,
+                "level0_module_chain_in_silico_validated": True,
+                "level0_vector_sequence_provided": bool(
+                    interfaces["level0"].get("vector_sequence")
+                ),
+                "level0_vector_sequence_in_silico_validated": False,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _validate_ppr_block_chain(
+    plan: pd.DataFrame,
+    level0: pd.DataFrame,
+    library: pd.DataFrame,
+    parts_full: pd.DataFrame,
+    assembled_cds: str,
+    interfaces_profile: Dict[str, Any],
+    architecture: str,
+) -> Dict[str, Any]:
+    """Join the PPR blocks and validate only that in-silico block chain.
+
+    The physical Level 1 module begins at the first external coding overhang,
+    whereas the in-frame translation model also needs the few leading bases
+    that precede that overhang in the deposited first-part coding window.  The
+    comparison below proves that the exported two-stage assembly reconstructs
+    the same binding tract used for translation QC.
+    """
+    group_order = (
+        plan.groupby("assembly_group", sort=False)["assembly_slot"]
+        .min()
+        .sort_values()
+        .index.tolist()
+    )
+    by_group = level0.set_index("assembly_group")
+    if set(group_order) != set(by_group.index):
+        raise AssertionError("Level 0 products do not match the assembly plan")
+    layout = interfaces_profile["architectures"][architecture]
+    if group_order != layout["blocks"]:
+        raise AssertionError(
+            f"{architecture}: block order {group_order} does not match {layout['blocks']}"
+        )
+    blocks = [str(by_group.loc[group, "ppr_block_5to3"]) for group in group_order]
+    ppr_outer = interfaces_profile["level0"]["ppr_outer"]
+    if blocks[0][:4] != ppr_outer["n_overhang_5p"]:
+        raise AssertionError("first PPR block misses the configured PPR N interface")
+    if blocks[-1][-4:] != ppr_outer["c_overhang_5p"]:
+        raise AssertionError("last PPR block misses the configured PPR C interface")
+    for left, right, join_name in zip(blocks, blocks[1:], layout["joins"]):
+        junction = interfaces_profile["junctions"][join_name]
+        if reverse_complement(junction["upstream_c_5p"]) != junction["downstream_n_5p"]:
+            raise AssertionError(f"{join_name}: directional terminal pair is incompatible")
+        expected = junction["assembled_plus_site"]
+        if left[-4:] != expected or right[:4] != expected:
+            raise AssertionError(
+                f"{join_name}: PPR block junction mismatch "
+                f"{left[-4:]}/{right[:4]} != {expected}"
+            )
+    module_core = blocks[0] + "".join(block[4:] for block in blocks[1:])
+
+    first_plan = plan.sort_values("assembly_slot").iloc[0]
+    first_part = str(first_plan["part_id"])
+    first_optimized = str(
+        library.set_index("optimized_part_id").loc[
+            str(first_plan["optimized_part_id"]), "optimized_cds"
+        ]
+    )
+    oh5 = int(parts_full.set_index("part_id").loc[first_part, "oh5_mask_start"])
+    coding_frame_prefix = clean_dna(first_optimized)[:oh5]
+    reconstructed = coding_frame_prefix + module_core
+    if reconstructed != clean_dna(assembled_cds):
+        raise AssertionError(
+            "Exported pAGM9121 blocks do not reconstruct the translated GRASP tract"
+        )
+
+    interface_chain = [blocks[0][:4]] + [block[-4:] for block in blocks]
+    final = interfaces_profile["final_cassette"]
+    return {
+        "level0_group_order": ";".join(group_order),
+        "ppr_interface_chain": ";".join(interface_chain),
+        "ppr_block_chain_5to3": module_core,
+        "coding_frame_prefix_5to3": coding_frame_prefix,
+        "binding_tract_cds_5to3": reconstructed,
+        "ppr_block_chain_in_silico_validated": True,
+        "final_cassette_vector_id": final["vector_id"],
+        "final_cassette_n_terminal_overhang_5p": final["n_overhang_5p"],
+        "final_cassette_c_terminal_overhang_5p": final["c_overhang_5p"],
+        "final_cassette_requirements_checked": True,
+        "final_cassette_vector_sequence_provided": bool(
+            interfaces_profile["final_cassette"].get("vector_sequence")
+        ),
+        "final_cassette_vector_sequence_in_silico_validated": False,
+        "standalone_expression_cassette": False,
+    }
 
 
 def run_oneshot_design(
@@ -38,210 +242,273 @@ def run_oneshot_design(
     seed: int = 42,
     n_fragments: Optional[int] = None,
     max_fragment_cds: Optional[int] = None,
-    oligo_prefix: str = DEFAULT_OLIGO_PREFIX,
-    oligo_suffix: str = DEFAULT_OLIGO_SUFFIX,
-    fidelity: Optional[LigationFidelityCalculator] = None,
+    oligo_prefix: Optional[str] = None,
+    oligo_suffix: Optional[str] = None,
+    fidelity=None,
     log: Callable[[str], None] = print,
 ) -> Dict[str, Any]:
-    """
-    Protein-first one-shot pipeline (no library parts):
+    """Design target-specific dsDNA fragments through the configured entry vector.
 
-    1. RNA → PPR code → continuous binder AA
-    2. Codon + synthesis optimize the full CDS
-    3. Choose codon-aligned cut sites whose DNA overhangs are high-fidelity
-    4. Export GGA oligos (flanks + fragment DNA)
+    ``n_fragments`` and free custom flanks belonged to the former generic
+    splitter and are rejected because they cannot guarantee interface
+    compatibility. GRASP fixes five Level -1 modules per PPR block.
     """
+    _ = fidelity  # retained only for source-level API compatibility
+    if n_fragments is not None:
+        raise ValueError(
+            "GRASP one-shot uses fixed five-part Level 0 blocks; "
+            "n_fragments is no longer configurable"
+        )
+    if max_fragment_cds is not None:
+        raise ValueError("max_fragment_cds is not used by the GRASP module topology")
+    if oligo_prefix is not None or oligo_suffix is not None:
+        raise ValueError(
+            "Custom one-shot flanks must be supplied through assembly_interfaces"
+        )
+
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-
     info = describe_binder(target_rna)
     rna = info["target_rna"]
-    aa = info["aa_sequence"]
-    log(
-        f"▶ One-shot · RNA {rna} → {info['aa_length']} aa binder "
-        f"(PPR {info['ppr_code']})"
+    architecture = f"{len(rna)}S"
+    plan = compile_target_gap(
+        rna,
+        architecture=architecture,
+        nterm_overhang=str(config.get("nterm_overhang", "AGGT")),
     )
 
-    synth = config.get("synthesis", {})
-    if max_fragment_cds is None:
-        max_oligo = int(synth.get("max_oligo_length", 300))
-        flank = len(oligo_prefix) + len(oligo_suffix)
-        max_fragment_cds = max(120, max_oligo - flank - 10)
-
-    log(
-        f"  Annealing full CDS ({info['cds_length']} nt, "
-        f"{config['optimizer']['iterations_per_part']:,} iters)…"
-    )
-    full_mask = "N" * (3 * len(aa))
-    cds, objective = optimize_coding_sequence(
-        aa_sequence=aa,
-        coding_mask=full_mask,
-        codon_data=codon_data,
-        config=config,
-    )
-    cds = clean_dna(cds)
-    code = int(config.get("genetic_code", 1))
-    if not cds_matches_organism(
-        cds, aa, genetic_code=code, codon_data=codon_data
-    ):
-        raise AssertionError(
-            "Full-CDS anneal failed organism codon-table translation check "
-            f"(genetic code {code})."
-        )
-    log(f"  Full CDS objective={objective:.3f} · verified vs organism table")
-
-    lig = config.get("ligation", {})
-    calc = fidelity or LigationFidelityCalculator(
-        temperature=lig.get("temperature", 25),
-        hours=lig.get("hours", 18),
-        ligation_table=lig.get("ligation_table"),
-        min_efficiency=lig.get("min_efficiency", 0.25),
-        min_fidelity=lig.get("min_fidelity", 0.9),
-    )
-
-    if n_fragments is None:
-        n_fragments = suggest_fragment_count(
-            len(cds), max_fragment_cds=max_fragment_cds
-        )
-
-    plan = plan_gga_from_optimized_cds(
-        cds,
-        aa,
-        n_fragments=n_fragments,
-        max_fragment_cds=max_fragment_cds,
-        fidelity=calc,
-        seed=seed,
-    )
-    # Rebuild fragment DNA slices properly (codon-complete upstream;
-    # downstream includes 5′ overhang for Type IIS sticky end)
-    cuts = [int(x) for x in plan["aa_end_0based"].tolist()[:-1]]
-    ohs = [str(x) for x in plan["oh3"].tolist()[:-1]]
-    fid = float(plan["ligation_fidelity_set"].iloc[0])
-    log(f"  GGA · {len(plan)} fragments · overhang set fidelity {fid:.4f}")
-    log(f"  Overhangs: {', '.join(ohs)}")
-
-    rows = []
-    n = len(plan)
-    for i, prow in enumerate(plan.itertuples(index=False)):
-        aa0, aa1 = int(prow.aa_start_0based), int(prow.aa_end_0based)
-        if i == 0:
-            frag_cds = cds[0 : 3 * aa1]
-        else:
-            frag_cds = cds[3 * aa0 - 4 : 3 * aa1]
-        full_oligo = clean_dna(oligo_prefix) + frag_cds + clean_dna(oligo_suffix)
-        cds_qc = synthesis_qc(frag_cds, config)
-        oligo_qc = synthesis_qc(full_oligo, config, forbidden_scan=frag_cds)
-        # Fragment slices may include a 4-nt sticky overhang; verify protein on
-        # the codon-complete interior (drop leading 4 nt for i>0).
-        frag_aa = aa[aa0:aa1]
-        frag_orf = frag_cds if i == 0 else frag_cds[4:]
-        frag_tx = verify_cds_for_organism(
-            frag_orf, frag_aa, genetic_code=code, codon_data=codon_data
-        )
-        rows.append(
-            {
-                "fragment_id": prow.fragment_id,
-                "assembly_order": int(prow.assembly_order),
-                "aa_start_0based": aa0,
-                "aa_end_0based": aa1,
-                "aa_length": aa1 - aa0,
-                "oh5": prow.oh5,
-                "oh3": prow.oh3,
-                "fragment_cds": frag_cds,
-                "oligo_prefix": clean_dna(oligo_prefix),
-                "oligo_suffix": clean_dna(oligo_suffix),
-                "oligo_sequence_5to3": full_oligo,
-                "oligo_length": len(full_oligo),
-                "oligo_gc": oligo_qc["gc_fraction"],
-                "oligo_warnings": oligo_qc["warnings"],
-                "oligo_failures": oligo_qc["failures"],
-                "translation_verified": bool(frag_tx["ok"]),
-                "codon_table_ok": bool(frag_tx["codon_table_ok"]),
-                "qc_passed": (
-                    cds_qc["passed"]
-                    and oligo_qc["passed"]
-                    and bool(frag_tx["ok"])
-                ),
-                "ligation_fidelity_set": fid,
-            }
-        )
-        log(
-            f"    {prow.fragment_id}: aa {aa0}–{aa1} · "
-            f"{len(frag_cds)} nt CDS · oligo {len(full_oligo)} nt · "
-            f"oh5={prow.oh5 or '—'} oh3={prow.oh3 or '—'}"
-        )
-
-    oligos = pd.DataFrame(rows)
-    plan.to_csv(output_dir / f"gga_plan_{rna}.csv", index=False)
-    oligos.to_csv(output_dir / f"oneshot_{rna}_oligos.csv", index=False)
-    with open(output_dir / f"full_cds_{rna}.fasta", "w") as handle:
-        handle.write(f">GRASP_oneshot_{rna}_full_CDS\n{cds}\n")
-    with open(output_dir / f"oneshot_{rna}_oligos.fasta", "w") as handle:
-        for row in oligos.itertuples(index=False):
-            handle.write(
-                f">{rna}|{row.fragment_id}|order{row.assembly_order}\n"
-                f"{row.oligo_sequence_5to3}\n"
+    records = load_grasp_records([bundled_profile_genbank() / "GRASP_-1.gb"])
+    parts_full = build_parts_table(records)
+    local_config = copy.deepcopy(config)
+    interfaces = resolve_assembly_interfaces(local_config)
+    if (
+        str(
+            local_config.get("overhang_redesign", {}).get(
+                "cut_mode", "native_fixed"
             )
-    with open(output_dir / f"oneshot_{rna}_assembled.fasta", "w") as handle:
-        handle.write(f">GRASP_oneshot_{rna}\n{cds}\n")
+        ).lower()
+        == "movable_arelf"
+    ):
+        # One-shot does not run a Pareto search, but it must honor the dashboard's
+        # configured inter-block overhangs and ARELF offsets.
+        parts_full = materialize_arelf_parts(
+            parts_full,
+            {},
+            config=local_config,
+            codon_data=codon_data,
+        )
+    available = parts_full.set_index("part_id", drop=False)
+    missing = sorted(set(plan["part_id"]) - set(available.index))
+    if missing:
+        raise ValueError(f"Deposited GRASP profile lacks selected modules: {missing}")
 
-    # Reassemble from oligos: F1 full ORF slice; Fi drop 4-nt 5′ overhang
-    bits = []
-    for i, row in enumerate(oligos.itertuples(index=False)):
-        bits.append(row.fragment_cds if i == 0 else row.fragment_cds[4:])
-    assembled = clean_dna("".join(bits))
-    assembled_tx = verify_cds_for_organism(
-        assembled, aa, genetic_code=code, codon_data=codon_data
+    # A repeated module is cloned once and reused in every listed assembly slot.
+    unique_ids = list(dict.fromkeys(plan["part_id"].astype(str)))
+    selected_parts = available.loc[unique_ids].reset_index(drop=True)
+
+    local_config.setdefault("optimizer", {})["orthogonal_versions_per_part"] = 1
+    local_config.setdefault("forbidden_sites", {}).update(
+        {"BsaI": "GGTCTC", "BpiI": "GAAGAC"}
     )
-    translation_ok = bool(assembled_tx["ok"]) and assembled == cds
+    old_py_state = random.getstate()
+    old_np_state = np.random.get_state()
+    random.seed(seed)
+    np.random.seed(seed)
+    try:
+        library = optimize_library(selected_parts, codon_data, local_config, log=log)
+    finally:
+        random.setstate(old_py_state)
+        np.random.set_state(old_np_state)
+
+    library = library[library["version"] == 1].copy().reset_index(drop=True)
+    validation = [
+        validate_order_fragment_in_silico(seq, interfaces)
+        for seq in library["oligo_sequence_5to3"]
+    ]
+    validation_df = pd.DataFrame(validation)
+    orderable = pd.concat([library.reset_index(drop=True), validation_df], axis=1)
+    orderable.insert(0, "order_fragment_id", [f"GRASP_{pid}" for pid in orderable.part_id])
+    orderable["sequence_type"] = "double-stranded DNA synthesis fragment"
+    orderable["assembly_interface_profile"] = interfaces["profile_name"]
+    orderable["entry_vector"] = interfaces["level_minus1_entry"]["vector_id"]
+    orderable["entry_cloning_enzyme"] = ENTRY_CLONING_ENZYME
+    orderable["module_release_enzyme"] = MODULE_RELEASE_ENZYME
+    orderable["level0_acceptor"] = interfaces["level0"]["acceptor_id"]
+    orderable["order_quantity"] = orderable["optimized_part_id"].map(
+        plan["optimized_part_id"].value_counts()
+    )
+    orderable["used_in_groups"] = orderable["optimized_part_id"].map(
+        plan.groupby("optimized_part_id", sort=False)["assembly_group"]
+        .agg(lambda values: ";".join(dict.fromkeys(values)))
+    )
+    orderable["oligo_sequence_5to3"] = orderable["oligo_sequence_5to3"].map(clean_dna)
+    orderable["order_sequence_5to3"] = orderable["oligo_sequence_5to3"]
+
+    level0 = _validate_level0_groups(plan, orderable, interfaces)
+    assembled = simulate_assembled_cds(
+        plan,
+        library,
+        parts_full,
+        genetic_code=int(local_config.get("genetic_code", 1)),
+        config=local_config,
+        codon_data=codon_data,
+    )
+    if not assembled.get("translation_verified"):
+        raise AssertionError(
+            "Target-specific GRASP modules did not reconstruct the expected binder"
+        )
+    ppr_chain = _validate_ppr_block_chain(
+        plan,
+        level0,
+        library,
+        parts_full,
+        assembled["assembled_cds"],
+        interfaces,
+        architecture,
+    )
+
+    plan = plan.merge(
+        orderable[
+            [
+                "optimized_part_id",
+                "order_fragment_id",
+                "module_release_oh5",
+                "module_release_oh3",
+            ]
+        ],
+        on="optimized_part_id",
+        how="left",
+        validate="many_to_one",
+    )
+
+    plan_path = output_dir / f"assembly_plan_{rna}.csv"
+    order_csv = output_dir / f"oneshot_{rna}_orderable_fragments.csv"
+    legacy_csv = output_dir / f"oneshot_{rna}_oligos.csv"
+    order_fasta = output_dir / f"oneshot_{rna}_orderable_fragments.fasta"
+    legacy_fasta = output_dir / f"oneshot_{rna}_oligos.fasta"
+    level0_path = output_dir / f"oneshot_{rna}_ppr_blocks.csv"
+    ppr_chain_path = output_dir / f"oneshot_{rna}_ppr_block_chain.csv"
+    binding_tract_fasta = output_dir / f"oneshot_{rna}_binding_tract_context.fasta"
+
+    plan.to_csv(plan_path, index=False)
+    orderable.to_csv(order_csv, index=False)
+    orderable.to_csv(legacy_csv, index=False)
+    level0.to_csv(level0_path, index=False)
+    pd.DataFrame([ppr_chain]).to_csv(ppr_chain_path, index=False)
+    fasta_text = "".join(
+        f">{row.order_fragment_id}|dsDNA|qty={row.order_quantity}|{row.entry_vector}_BsaI\n"
+        f"{row.order_sequence_5to3}\n"
+        for row in orderable.itertuples(index=False)
+    )
+    order_fasta.write_text(fasta_text)
+    legacy_fasta.write_text(fasta_text)
+    binding_tract_fasta.write_text(
+        f">GRASP_{rna}|binding_tract_CDS_context|not_expression_cassette\n"
+        f"{assembled['assembled_cds']}\n"
+    )
 
     summary = {
         "target_rna": rna,
+        "architecture": architecture,
         "ppr_code": info["ppr_code"],
         "aa_length": info["aa_length"],
-        "n_fragments": n,
-        "ligation_fidelity": fid,
-        "translation_verified": translation_ok,
-        "genetic_code": code,
-        "codon_table_ok": bool(assembled_tx["codon_table_ok"]),
-        "fragments_qc": bool(oligos["qc_passed"].all()),
-        "full_cds_objective": objective,
-        "organism": config.get("selected_organism")
-        or config.get("selected_organism_label"),
+        "n_assembly_slots": len(plan),
+        "n_unique_order_fragments": len(orderable),
+        "n_level0_assemblies": len(level0),
+        "assembly_interface_profile": interfaces["profile_name"],
+        "entry_vector": interfaces["level_minus1_entry"]["vector_id"],
+        "entry_n_terminal_overhang_5p": interfaces["level_minus1_entry"][
+            "n_overhang_5p"
+        ],
+        "entry_c_terminal_overhang_5p": interfaces["level_minus1_entry"][
+            "c_overhang_5p"
+        ],
+        "entry_cloning_enzyme": ENTRY_CLONING_ENZYME,
+        "module_release_enzyme": MODULE_RELEASE_ENZYME,
+        "level0_acceptor": interfaces["level0"]["acceptor_id"],
+        "ppr_n_terminal_overhang_5p": interfaces["level0"]["ppr_outer"][
+            "n_overhang_5p"
+        ],
+        "ppr_c_terminal_overhang_5p": interfaces["level0"]["ppr_outer"][
+            "c_overhang_5p"
+        ],
+        "final_cassette_vector": interfaces["final_cassette"]["vector_id"],
+        "final_cassette_n_terminal_overhang_5p": interfaces["final_cassette"][
+            "n_overhang_5p"
+        ],
+        "final_cassette_c_terminal_overhang_5p": interfaces["final_cassette"][
+            "c_overhang_5p"
+        ],
+        "translation_verified": bool(assembled["translation_verified"]),
+        "order_fragment_requirements_checked": bool(
+            orderable["order_fragment_requirements_checked"].all()
+        ),
+        "entry_interface_requirements_checked": bool(
+            orderable["entry_interface_requirements_checked"].all()
+        ),
+        "entry_vector_context_in_silico_validated": bool(
+            orderable["entry_vector_context_in_silico_validated"].all()
+        ),
+        "entry_vector_sequence_in_silico_validated": bool(
+            orderable["entry_vector_sequence_in_silico_validated"].all()
+        ),
+        "module_release_requirements_checked": bool(
+            orderable["module_release_requirements_checked"].all()
+        ),
+        "level0_module_chain_in_silico_validated": bool(
+            level0["level0_module_chain_in_silico_validated"].all()
+        ),
+        "level0_vector_sequence_in_silico_validated": bool(
+            level0["level0_vector_sequence_in_silico_validated"].all()
+        ),
+        "ppr_block_chain_in_silico_validated": bool(
+            ppr_chain["ppr_block_chain_in_silico_validated"]
+        ),
+        "final_cassette_requirements_checked": bool(
+            ppr_chain["final_cassette_requirements_checked"]
+        ),
+        "final_cassette_vector_sequence_in_silico_validated": bool(
+            ppr_chain["final_cassette_vector_sequence_in_silico_validated"]
+        ),
+        "standalone_expression_cassette": False,
+        "fragments_clean_qc": bool(orderable["qc_passed"].all()),
+        "fragments_hard_constraints_passed": bool(
+            orderable["hard_constraints_passed"].all()
+        ),
+        "vendor_acceptance_confirmed": False,
+        "organism": local_config.get("selected_organism")
+        or local_config.get("selected_organism_label"),
     }
     pd.DataFrame([summary]).to_csv(
         output_dir / f"oneshot_{rna}_summary.csv", index=False
     )
 
     log(
-        f"✓ One-shot done · translation_verified={translation_ok} · "
-        f"fragment_qc={summary['fragments_qc']} · "
-        f"oligos → oneshot_{rna}_oligos.csv"
+        f"✓ One-shot {architecture}: {len(orderable)} unique dsDNA fragments; "
+        f"{len(plan)} assembly uses; order geometry, PPR block chain, "
+        f"and translation checked in silico"
     )
-
     return {
         "target_rna": rna,
         "binder": info,
-        "aa_sequence": aa,
-        "full_cds": cds,
+        "aa_sequence": info["aa_sequence"],
+        "binding_tract_cds": assembled["assembled_cds"],
         "gga_plan": plan,
-        "oligos": oligos,
-        "assembled": {
-            "assembled_cds": assembled,
-            "expected_protein": aa,
-            "observed_protein": assembled_tx.get("observed_protein", ""),
-            "translation_verified": translation_ok,
-            "genetic_code_ok": bool(assembled_tx["genetic_code_ok"]),
-            "codon_table_ok": bool(assembled_tx["codon_table_ok"]),
-            "genetic_code": code,
-            "ligation_fidelity": fid,
-            "binder_info": info,
-        },
+        "assembly_plan": plan,
+        "oligos": orderable,
+        "orderable_fragments": orderable,
+        "level0_assemblies": level0,
+        "ppr_block_chain": ppr_chain,
+        "assembled": assembled,
         "output_dir": output_dir,
-        "oligo_csv": output_dir / f"oneshot_{rna}_oligos.csv",
-        "oligo_fasta": output_dir / f"oneshot_{rna}_oligos.fasta",
-        "assembled_fasta": output_dir / f"oneshot_{rna}_assembled.fasta",
-        "selected_overhangs": {f"J{i+1}": oh for i, oh in enumerate(ohs)},
+        "oligo_csv": legacy_csv,
+        "oligo_fasta": legacy_fasta,
+        "order_csv": order_csv,
+        "order_fasta": order_fasta,
+        "level0_csv": level0_path,
+        "ppr_block_chain_csv": ppr_chain_path,
+        "binding_tract_fasta": binding_tract_fasta,
+        "selected_overhangs": {},
         "pareto_front": None,
         "summary": summary,
     }
@@ -249,6 +516,6 @@ def run_oneshot_design(
 
 def subset_for_target(*_args, **_kwargs):
     raise RuntimeError(
-        "subset_for_target is obsolete. One-shot design no longer uses library "
-        "modules — use run_oneshot_design (RNA → protein → free GGA cuts)."
+        "subset_for_target is obsolete; run_oneshot_design now creates the "
+        "target-specific pAGM1311 Level -1 subset directly"
     )

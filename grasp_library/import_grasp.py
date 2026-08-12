@@ -19,6 +19,14 @@ from Bio.Seq import Seq
 
 warnings.simplefilter("ignore", BiopythonParserWarning)
 
+from .assembly_interfaces import (
+    build_order_fragment,
+    deposited_grasp_interface_preset,
+    order_fragment_arms,
+    resolve_assembly_interfaces,
+    reverse_complement,
+)
+
 OVERHANG_SET = {
     "AGGT",
     "AATG",
@@ -32,8 +40,82 @@ OVERHANG_SET = {
     "CACG",
 }
 
-# Unique 9S overhangs. B/C/D are reused in CDS1 and CDS2, so ACTC/AAGA/GCAC/TGAA
-# are single redesign variables shared across both assembly reactions.
+# pAGM1311 is the universal Level -1 entry vector used by GRASP.  An ordered
+# dsDNA fragment is inserted through the vector's BsaI sites with ACAT/TTGT
+# fusion sites.  The BsaI sites below are on the ordered fragment and disappear
+# after cloning; the retained pAGM1311 backbone then completes flanking BpiI
+# sites used to release the GRASP module into pAGM9121.
+_DEPOSITED_INTERFACES = deposited_grasp_interface_preset()
+_DEPOSITED_PREFIX, _DEPOSITED_SUFFIX = order_fragment_arms(_DEPOSITED_INTERFACES)
+PAGM1311_ORDER_5P_ARM = _DEPOSITED_PREFIX[:-4]
+PAGM1311_ORDER_3P_ARM = _DEPOSITED_SUFFIX[4:]
+PAGM1311_INSERT_5P_FUSION = _DEPOSITED_INTERFACES["level_minus1_entry"]["n_overhang_5p"]
+PAGM1311_INSERT_3P_FUSION = reverse_complement(
+    _DEPOSITED_INTERFACES["level_minus1_entry"]["c_overhang_5p"]
+)
+PAGM1311_BACKBONE_5P_CONTEXT = _DEPOSITED_INTERFACES["level_minus1_entry"]["completion_context_5p"]
+PAGM1311_BACKBONE_3P_CONTEXT = _DEPOSITED_INTERFACES["level_minus1_entry"]["completion_context_3p"]
+PAGM9121_EXTERNAL_5P_OVERHANG = _DEPOSITED_INTERFACES["level0"]["acceptor_outer"]["n_overhang_5p"]
+PAGM9121_EXTERNAL_3P_OVERHANG = _DEPOSITED_INTERFACES["level0"]["acceptor_outer"]["c_overhang_5p"]
+
+
+def build_configured_order_fragment(
+    optimized_cds: str,
+    *,
+    part_id: str,
+    oh5_mask_start: int,
+    oh3_mask_start: int,
+    config: Optional[dict] = None,
+    interfaces: Optional[dict] = None,
+) -> str:
+    """Build an order fragment for the configured entry/assembly profile."""
+    profile = interfaces or resolve_assembly_interfaces(config)
+    cds = re.sub(r"\s+", "", str(optimized_cds).upper().replace("U", "T"))
+    if set(cds) - set("ACGT"):
+        raise ValueError(f"{part_id}: invalid DNA in optimized CDS")
+    oh5 = int(oh5_mask_start)
+    oh3 = int(oh3_mask_start)
+    if not (0 <= oh5 < oh3 + 4 <= len(cds)):
+        raise ValueError(
+            f"{part_id}: invalid overhang coordinates oh5={oh5}, oh3={oh3}, "
+            f"CDS length={len(cds)}"
+        )
+    payload = cds[oh5 : oh3 + 4]
+    outer = profile["level0"].get("acceptor_outer")
+    role = str(part_id).split("_", 1)[0]
+    if outer is not None and role.endswith("A"):
+        payload = outer["n_overhang_5p"] + payload
+    if outer is not None and role.endswith("E"):
+        payload = payload + outer["c_overhang_5p"]
+    return build_order_fragment(payload, profile)
+
+
+def build_pagm1311_order_fragment(
+    optimized_cds: str,
+    *,
+    part_id: str,
+    oh5_mask_start: int,
+    oh3_mask_start: int,
+) -> str:
+    """Build a dsDNA order sequence that survives both GRASP cloning stages.
+
+    Only the overhang-bounded module is released by BpiI.  A/E parts also carry
+    the fixed pAGM9121 external fusion site outside their coding overhang.  This
+    coordinate-based construction prevents mutable in-frame padding from
+    corrupting the pAGM1311 ACAT/TTGT entry-vector fusion sites.
+    """
+    return build_configured_order_fragment(
+        optimized_cds,
+        part_id=part_id,
+        oh5_mask_start=oh5_mask_start,
+        oh3_mask_start=oh3_mask_start,
+        interfaces=_DEPOSITED_INTERFACES,
+    )
+
+# Coding junctions annotated in the deposited modules.  ACTC/AAGA/GCAC/TGAA
+# are the four BpiI-released internal junctions used in every five-part Level 0
+# assembly.  AGGT/CTTC/TTCG are later-stage BsaI/MoClo fusion interfaces and are
+# deliberately not eligible for redesign.
 JUNCTION_ORDER_9S = [
     ("J_Nterm", "AGGT"),  # 1A 5′ (AGGT preferred; AATG alternate)
     ("J_ACTC", "ACTC"),  # 1A/2A 3′ ↔ B 5′
@@ -43,6 +125,25 @@ JUNCTION_ORDER_9S = [
     ("J_CTTC", "CTTC"),  # 1E 3′ ↔ 2A 5′
     ("J_Cterm", "TTCG"),  # 2E 3′
 ]
+
+# Each binding architecture is first assembled as five-part Level 0 blocks,
+# which are subsequently joined into the complete sPPR.  The block order mirrors
+# GRASP_AP.py: pPR0_1, optionally pPR0_14 and pPR0_19, then pPR0_2.  Keep the
+# existing CDS1/CDS2 labels for backwards compatibility with exported plans.
+ARCHITECTURE_LAYOUTS = {
+    "9S": {
+        "target_length": 9,
+        "assembly_groups": ("CDS1", "CDS2"),
+    },
+    "14S": {
+        "target_length": 14,
+        "assembly_groups": ("CDS1", "CDS14", "CDS2"),
+    },
+    "19S": {
+        "target_length": 19,
+        "assembly_groups": ("CDS1", "CDS14", "CDS19", "CDS2"),
+    },
+}
 
 # GAP code_part ↔ filename suffix (GRASP_AP.partpicker)
 CODE_TO_SUFFIX = {
@@ -157,18 +258,25 @@ def _choose_coding_window(parsed: dict) -> dict:
 
 
 def _flanks(parsed: dict, window_start: int, window_end: int) -> Tuple[str, str]:
+    """Return order-ready BsaI arms for cloning the module into pAGM1311.
+
+    The deposited plasmids contain the post-cloning product, so the BsaI sites
+    used to insert the synthesized fragment are absent.  Reconstruct them around
+    the annotated ACAT...TTGT insert rather than accidentally exporting one
+    retained BpiI site from the entry-vector backbone.
+    """
     seq = parsed["seq"]
-    # 5′ flank: from insert start (or ACAT) through base before coding window
-    insert_start = parsed["insert"][0] if parsed["insert"] else 0
-    prefix = seq[insert_start:window_start]
-    # 3′ flank: after coding window through BpiI (GTCTTC) if present
-    suffix_region = seq[window_end : window_end + 16]
-    bpi = suffix_region.find("GTCTTC")
-    if bpi >= 0:
-        suffix = suffix_region[: bpi + 6]
-    else:
-        suffix = suffix_region[:8]
-    return prefix, suffix
+    if parsed["insert"] is None:
+        raise ValueError(f"{parsed['name']}: no annotated pAGM1311 insert")
+    insert_start, insert_end, insert_seq = parsed["insert"]
+    if not insert_seq.startswith(PAGM1311_INSERT_5P_FUSION):
+        raise ValueError(f"{parsed['name']}: pAGM1311 insert does not start ACAT")
+    if not insert_seq.endswith(PAGM1311_INSERT_3P_FUSION):
+        raise ValueError(f"{parsed['name']}: pAGM1311 insert does not end TTGT")
+    if not (insert_start <= window_start <= window_end <= insert_end):
+        raise ValueError(f"{parsed['name']}: coding window lies outside entry insert")
+
+    return PAGM1311_ORDER_5P_ARM, PAGM1311_ORDER_3P_ARM
 
 
 def _part_id_from_name(name: str) -> str:
@@ -301,8 +409,8 @@ def build_junction_map_9s(records: Sequence[dict]) -> pd.DataFrame:
         if part_id.startswith("2E_") and oh3 == "TTCG":
             add("J_Cterm", part_id, "3")
 
-        # Shared 9S topology (B/C/D used in both CDS assemblies)
-        if role == "1A" and oh3 == "ACTC":
+        # Every A extension feeds the shared B/C/D core.
+        if role in {"1A", "2A", "14A", "19A"} and oh3 == "ACTC":
             add("J_ACTC", part_id, "3")
         if role == "B" and oh5 == "ACTC":
             add("J_ACTC", part_id, "5")
@@ -316,17 +424,13 @@ def build_junction_map_9s(records: Sequence[dict]) -> pd.DataFrame:
             add("J_GCAC", part_id, "5")
         if role == "D" and oh3 == "TGAA":
             add("J_TGAA", part_id, "3")
-        if role == "1E" and oh5 == "TGAA":
+        # Every E extension receives the shared B/C/D core.
+        if role in {"1E", "2E", "14E", "19E"} and oh5 == "TGAA":
             add("J_TGAA", part_id, "5")
         if role == "1E" and oh3 == "CTTC":
             add("J_CTTC", part_id, "3")
         if role == "2A" and oh5 == "CTTC":
             add("J_CTTC", part_id, "5")
-        if role == "2A" and oh3 == "ACTC":
-            add("J_ACTC", part_id, "3")
-        if role == "2E" and oh5 == "TGAA":
-            add("J_TGAA", part_id, "5")
-
     df = pd.DataFrame(rows).drop_duplicates()
     return df.sort_values(["junction", "part_id", "end"]).reset_index(drop=True)
 
@@ -608,9 +712,12 @@ def import_grasp_profile(
     records = load_grasp_records(paths)
     parts = build_parts_table(records)
     junction_map = build_junction_map_9s(records)
-    # Restrict overhang redesign candidates to core 9S junctions by default
+    # Only the four physical BpiI subassembly junctions may be redesigned.
+    # MoClo interfaces AGGT/CTTC/TTCG remain native so the resulting Level 0
+    # constructs stay compatible with standard flanking domains and vectors.
+    redesignable = {"J_ACTC", "J_AAGA", "J_GCAC", "J_TGAA"}
     junction_9s = junction_map[
-        junction_map["junction"].isin([j for j, _ in JUNCTION_ORDER_9S])
+        junction_map["junction"].isin(redesignable)
     ].copy()
     candidates = build_overhang_candidates(records, junction_9s)
     target_map = build_target_map_catalog(records)
@@ -622,6 +729,8 @@ def import_grasp_profile(
             "coding_mask",
             "oligo_prefix",
             "oligo_suffix",
+            "oh5_mask_start",
+            "oh3_mask_start",
         ]
     ]
     parts_out.to_csv(output_dir / "parts.csv", index=False)
@@ -645,12 +754,21 @@ Imported from the deposited GenBank modules (`GRASP_-1.gb` / Assembly Planner).
 - Paper: https://academic.oup.com/nar/article/53/20/gkaf1169/8321212
 - Data: https://github.com/farleykvdg/GRASP
 
-Cut indices (`junction_map.mask_start_0based`) are taken from the GenBank
-overhang features relative to each part’s in-frame coding window. Protein
-sequences are translations of those windows (synonymous redesign only).
+The CSV junction coordinates record the deposited design. Runtime redesign is
+not tied to those indices: every synonymous four-base window fully inside the
+invariant ARELF motif (offsets 0–11) is eligible.
 
-Default 9S overhang set: AGGT–ACTC–AAGA–GCAC–TGAA–CTTC–ACTC–AAGA–GCAC–TGAA–TTCG
-(1A AGGT N-terminal fusion; AATG variants included as alternate parts).
+Order fragments use configurable BsaI Level -1 entry interfaces, configurable
+BpiI Level 0 block interfaces, and configurable final cassette interfaces. The
+deposited GRASP preset remains available as pAGM1311 -> pAGM9121.
+
+Deposited-preset order-strand geometry:
+TTTGGTCTCAACAT{{pAGM1311 insert}}TTGTTGAGACCAAA
+
+Deposited PPR block chains (not complete expression constructs):
+- 9S: AGGT–CDS1–CTTC–CDS2–TTCG
+- 14S: AGGT–CDS1–GTGA–CDS14–CTTC–CDS2–TTCG
+- 19S: AGGT–CDS1–GTGA–CDS14–CACG–CDS19–CTTC–CDS2–TTCG
 """
     )
 
@@ -670,13 +788,49 @@ def compile_target_gap(
     architecture: str = "9S",
     nterm_overhang: str = "AGGT",
 ) -> pd.DataFrame:
-    """Compile a binding-site RNA into ordered GRASP part_ids (GAP algorithm)."""
-    if architecture != "9S":
-        raise NotImplementedError("Importer currently wires 9S binding targets")
-    part_ids = pick_parts_for_target(target_rna, nterm_overhang=nterm_overhang)
-    groups = ["CDS1"] * 5 + ["CDS2"] * 5
-    orders = [1, 2, 3, 4, 5, 1, 2, 3, 4, 5]
-    rna = target_rna.upper().replace("T", "U")
+    """Compile a binding-site RNA into ordered GRASP part_ids (GAP algorithm).
+
+    The returned assembly groups are five-part Level 0 blocks.  A 9S target
+    produces the original ``CDS1``/``CDS2`` pair; 14S and 19S insert the
+    corresponding ``CDS14`` and ``CDS19`` intermediate blocks described by the
+    deposited GRASP assembly planner.
+    """
+    if not isinstance(architecture, str):
+        raise ValueError("Architecture must be one of: 9S, 14S, 19S")
+    architecture = architecture.strip().upper()
+    if architecture not in ARCHITECTURE_LAYOUTS:
+        raise ValueError(
+            f"Unsupported architecture {architecture!r}; expected one of: "
+            f"{', '.join(ARCHITECTURE_LAYOUTS)}"
+        )
+
+    if not isinstance(target_rna, str):
+        raise ValueError("Binding target must be a DNA/RNA string")
+    rna = target_rna.strip().upper().replace("T", "U")
+    invalid = sorted(set(rna) - set("ACGU"))
+    if invalid:
+        raise ValueError(
+            "Binding target contains noncanonical bases: " + ", ".join(invalid)
+        )
+
+    layout = ARCHITECTURE_LAYOUTS[architecture]
+    expected_length = int(layout["target_length"])
+    if len(rna) != expected_length:
+        raise ValueError(
+            f"Architecture {architecture} requires a {expected_length}-base "
+            f"binding target; received {len(rna)} bases"
+        )
+
+    part_ids = pick_parts_for_target(rna, nterm_overhang=nterm_overhang)
+    assembly_groups = tuple(layout["assembly_groups"])
+    groups = [group for group in assembly_groups for _ in range(5)]
+    orders = list(range(1, 6)) * len(assembly_groups)
+    if len(part_ids) != len(groups):
+        raise RuntimeError(
+            f"Internal GRASP layout mismatch for {architecture}: selected "
+            f"{len(part_ids)} parts for {len(groups)} assembly slots"
+        )
+
     rows = []
     for i, part_id in enumerate(part_ids):
         rows.append(
