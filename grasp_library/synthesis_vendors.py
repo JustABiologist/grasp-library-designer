@@ -339,6 +339,28 @@ GRASP_LIGATION_BY_LEVEL: Dict[str, str] = {
     "level1": LEVEL1_LIGATION,
 }
 
+# Single dashboard choice that documents both stage-matched matrices.
+GRASP_STAGE_MATCHED_LIGATION = (
+    "GRASP stage-matched · L−1 & L1: BsaI-HFv2 · L0: BbsI-HF · "
+    "37↔16 °C (Pryor 2020)"
+)
+
+# Potapov options remain Level 0 redesign overrides only.
+_POTAPOV_LEVEL0_OVERRIDES: Dict[str, str] = {
+    "Level 0 override only · T4 ligase 18 h · 25 °C (Potapov 2018; cycling proxy)": (
+        "T4 ligase only · 18 h · 25 °C (Potapov 2018; validated cycling proxy)"
+    ),
+    "Level 0 override only · T4 ligase 1 h · 25 °C (Potapov 2018)": (
+        "T4 ligase only · 1 h · 25 °C (Potapov 2018)"
+    ),
+    "Level 0 override only · T4 ligase 1 h · 37 °C (Potapov 2018)": (
+        "T4 ligase only · 1 h · 37 °C (Potapov 2018)"
+    ),
+    "Level 0 override only · T4 ligase 18 h · 37 °C (Potapov 2018)": (
+        "T4 ligase only · 18 h · 37 °C (Potapov 2018)"
+    ),
+}
+
 
 def vendor_names() -> List[str]:
     return list(SYNTHESIS_VENDORS.keys())
@@ -353,16 +375,23 @@ def ligation_table_names() -> List[str]:
 
 
 def redesign_ligation_table_names() -> List[str]:
-    """Matrices offered for Level 0 overhang-redesign scoring.
+    """Dashboard ligation choices: one stage-matched row, then Level 0 overrides.
 
-    Levels −1 and 1 always use the BsaI-HFv2 cycling proxy; they are not
-    selectable as the Level 0 redesign objective.
+    Levels −1 and 1 always stay on BsaI-HFv2. Only Level 0 scoring can be
+    switched to a Potapov T4-only surrogate.
     """
-    return [
-        name
-        for name, meta in LIGATION_TABLES.items()
-        if meta.get("cloning_level") in {None, "level0"}
-    ]
+    return [GRASP_STAGE_MATCHED_LIGATION, *_POTAPOV_LEVEL0_OVERRIDES.keys()]
+
+
+def resolve_dashboard_ligation_choice(table_name: str) -> str:
+    """Map a dashboard ligation label onto an internal ``LIGATION_TABLES`` key."""
+    if table_name == GRASP_STAGE_MATCHED_LIGATION:
+        return LEVEL0_LIGATION
+    if table_name in _POTAPOV_LEVEL0_OVERRIDES:
+        return _POTAPOV_LEVEL0_OVERRIDES[table_name]
+    if table_name in LIGATION_TABLES:
+        return table_name
+    raise ValueError(f"Unknown ligation table: {table_name!r}")
 
 
 def _protocol_payload(table_name: str) -> Dict[str, Any]:
@@ -440,38 +469,38 @@ def apply_enzyme_to_config(config: Dict[str, Any], enzyme_name: str) -> Dict[str
 def apply_ligation_table_to_config(
     config: Dict[str, Any], table_name: str
 ) -> Dict[str, Any]:
-    """Apply a Level 0 redesign matrix and freeze enzyme-matched stage proxies.
+    """Apply a dashboard ligation choice and freeze enzyme-matched stage proxies.
 
-    Selecting a Potapov/T4-only table overrides only the Level 0 redesign
-    objective. Level −1 and Level 1 remain BsaI-HFv2 37↔16 °C cycling proxies;
-    Level 0 remains BbsI-HF unless the selected table itself is that proxy or
-    another Level 0 override.
+    The stage-matched choice keeps Level −1 / Level 1 on BsaI-HFv2 and Level 0
+    on BbsI-HF. Potapov/T4-only labels override only the Level 0 redesign
+    objective. Selecting a lone Level −1 / Level 1 BsaI proxy never retargets
+    Level 0 redesign scoring away from BbsI-HF / BpiI.
     """
-    if table_name not in LIGATION_TABLES:
-        raise ValueError(f"Unknown ligation table: {table_name!r}")
+    resolved = resolve_dashboard_ligation_choice(table_name)
+    if resolved not in LIGATION_TABLES:
+        raise ValueError(f"Unknown ligation table: {resolved!r}")
     updated = deepcopy(config)
-    meta = LIGATION_TABLES[table_name]
+    meta = LIGATION_TABLES[resolved]
     level0_name = (
-        table_name
+        resolved
         if meta.get("cloning_level") in {None, "level0"}
         else LEVEL0_LIGATION
     )
-    # Selecting the Level −1 / Level 1 BsaI proxy must not silently retarget
-    # Level 0 redesign scoring away from BbsI-HF / BpiI.
     if meta.get("cloning_level") in {"level_minus1", "level1"}:
         level0_name = LEVEL0_LIGATION
         primary_name = LEVEL0_LIGATION
     else:
-        primary_name = table_name
+        primary_name = resolved
 
     by_level = grasp_ligation_by_level(level0_override=level0_name)
     primary = by_level["level0"] if primary_name == level0_name else _protocol_payload(
         primary_name
     )
-    # Primary ligation block stays the Level 0 redesign matrix for backwards
-    # compatibility with workflows that read config["ligation"].
     lig = dict(updated.get("ligation", {}))
     lig.update(primary)
+    # Keep the human dashboard label even when the internal key is Level 0.
+    lig["table_name"] = table_name
+    lig["resolved_table_name"] = primary_name
     lig["by_level"] = by_level
     lig["redesign_level"] = "level0"
     updated["ligation"] = lig
@@ -495,11 +524,18 @@ def ligation_protocol_for_level(
     lig = dict(config.get("ligation", {}))
     by_level = lig.get("by_level")
     if not isinstance(by_level, Mapping) or level not in by_level:
-        by_level = grasp_ligation_by_level(
-            level0_override=lig.get("table_name")
-            if lig.get("table_name") in redesign_ligation_table_names()
-            else None
-        )
+        override = None
+        table_name = lig.get("table_name")
+        if table_name:
+            try:
+                resolved = resolve_dashboard_ligation_choice(str(table_name))
+            except ValueError:
+                resolved = None
+            if resolved is not None:
+                meta = LIGATION_TABLES.get(resolved, {})
+                if meta.get("cloning_level") in {None, "level0"}:
+                    override = resolved
+        by_level = grasp_ligation_by_level(level0_override=override)
     if level not in by_level:
         raise ValueError(
             f"Unknown cloning level {level!r}; expected one of "

@@ -119,6 +119,12 @@ def test_dashboard_overhang_section_has_exactly_six_plain_end_fields(tmp_path: P
         "GGAG",
         "AGCG",
     ]
+    assert panel.redesign_plasmid.value is False
+    assert panel.redesign_level0.value is False
+    assert "plasmid overhangs" in panel.redesign_plasmid.description.lower()
+    assert "level 0" in panel.redesign_level0.description.lower()
+    assert "BsaI-HFv2" in panel.ligation.value
+    assert "BbsI-HF" in panel.ligation.value
 
 
 def test_notebook_forms_expose_the_same_six_overhang_fields():

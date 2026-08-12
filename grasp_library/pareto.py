@@ -17,7 +17,7 @@ from .dna import (
     is_self_reverse_complement,
     reverse_complement,
 )
-from .ligation_fidelity import LigationFidelityCalculator
+from .ligation_fidelity import LigationFidelityCalculator, fidelity_calculator_for_level
 from .objectives import ObjectiveScores, evaluate_design
 
 
@@ -32,6 +32,9 @@ class ParetoPoint:
         row = {
             "overhangs": ";".join(f"{k}={v}" for k, v in sorted(self.overhangs.items())),
             "ligation_fidelity": self.scores.ligation_fidelity,
+            "level_minus1_fidelity": self.scores.level_minus1_fidelity,
+            "level0_fidelity": self.scores.level0_fidelity or self.scores.ligation_fidelity,
+            "level1_fidelity": self.scores.level1_fidelity,
             "codon_optimality": self.scores.codon_optimality,
             "synthesis": self.scores.synthesis,
         }
@@ -138,9 +141,9 @@ def optimize_pareto_overhangs(
     """
     random.seed(seed)
 
-    calc = fidelity_calculator or LigationFidelityCalculator(
-        temperature=config.get("ligation", {}).get("temperature", 25),
-        hours=config.get("ligation", {}).get("hours", 18),
+    calc = fidelity_calculator or fidelity_calculator_for_level(
+        config,
+        str(config.get("ligation", {}).get("redesign_level", "level0")),
     )
     from .assembly_interfaces import (
         FIVE_PRIME_CODING_SITE,

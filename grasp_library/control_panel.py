@@ -30,7 +30,7 @@ from .sample_codon_tables import (
     sample_names,
 )
 from .synthesis_vendors import (
-    LEVEL0_LIGATION,
+    GRASP_STAGE_MATCHED_LIGATION,
     apply_enzyme_to_config,
     apply_ligation_table_to_config,
     apply_vendor_to_config,
@@ -162,6 +162,9 @@ def build_default_config(input_dir: Path) -> Dict[str, Any]:
             "orthogonal_versions_per_part": 1,
         },
         "overhang_redesign": {
+            "plasmid_overhangs": False,
+            "level0_junctions": False,
+            # Backward-compatible alias for Level 0 junction redesign.
             "enabled": False,
             "selection": "knee",
             "cut_mode": "movable_arelf",
@@ -176,7 +179,7 @@ def build_default_config(input_dir: Path) -> Dict[str, Any]:
         },
         "target_rna": "UUACACGUG",
     }
-    cfg = apply_ligation_table_to_config(cfg, LEVEL0_LIGATION)
+    cfg = apply_ligation_table_to_config(cfg, GRASP_STAGE_MATCHED_LIGATION)
     cfg["ligation"]["min_efficiency"] = 0.25
     cfg["ligation"]["min_fidelity"] = 0.9
     return cfg
@@ -266,9 +269,9 @@ class GraspControlPanel:
             options=redesign_ligation_table_names(),
             value=self.config.get("ligation", {}).get(
                 "table_name",
-                LEVEL0_LIGATION,
+                GRASP_STAGE_MATCHED_LIGATION,
             ),
-            description="Level 0 fidelity",
+            description="Ligation scoring",
             **_DD_WIDE,
         )
         self.architecture = widgets.Dropdown(
@@ -277,18 +280,27 @@ class GraspControlPanel:
             description="Architecture",
             **_DD,
         )
-        self.redesign = widgets.Dropdown(
-            options=[
-                ("On — explore synonymous cuts within ARELF", True),
-                ("Off — keep native GRASP overhangs", False),
-            ],
-            value=bool(self.config.get("overhang_redesign", {}).get("enabled", False)),
-            description="Overhang redesign",
-            **_DD_WIDE,
+        redesign_cfg = self.config.get("overhang_redesign", {})
+        self.redesign_plasmid = widgets.Checkbox(
+            value=bool(redesign_cfg.get("plasmid_overhangs", False)),
+            description="Redesign plasmid overhangs",
+            indent=False,
+            layout=widgets.Layout(width="520px"),
+        )
+        self.redesign_level0 = widgets.Checkbox(
+            value=bool(
+                redesign_cfg.get(
+                    "level0_junctions",
+                    redesign_cfg.get("enabled", False),
+                )
+            ),
+            description="Redesign Level 0 overhangs (assembled parts)",
+            indent=False,
+            layout=widgets.Layout(width="520px"),
         )
         self.selection = widgets.Dropdown(
             options=["knee", "max_fidelity"],
-            value=self.config.get("overhang_redesign", {}).get("selection", "knee"),
+            value=redesign_cfg.get("selection", "knee"),
             description="Pick from Pareto",
             **_DD,
         )
@@ -382,12 +394,26 @@ class GraspControlPanel:
             self.vendor,
             self.enzyme,
             self.ligation,
-            self.redesign,
+            self.redesign_plasmid,
+            self.redesign_level0,
             self.selection,
             self.depth,
         ):
             w.observe(self._on_setting_change, names="value")
         self.target_rna.on_submit(lambda _: self.apply())
+        self._sync_redesign_visibility()
+        self.redesign_plasmid.observe(self._on_redesign_toggle, names="value")
+        self.redesign_level0.observe(self._on_redesign_toggle, names="value")
+
+    def _on_redesign_toggle(self, change=None) -> None:
+        if not change or change.get("name") != "value":
+            return
+        self._sync_redesign_visibility()
+        self._on_setting_change(change)
+
+    def _sync_redesign_visibility(self) -> None:
+        """Show Pareto picker only when Level 0 junction redesign is on."""
+        self.selection.layout.display = "" if self.redesign_level0.value else "none"
 
     def _sync_codon_source_visibility(self) -> None:
         choice = self.organism.value
@@ -440,32 +466,57 @@ class GraspControlPanel:
                 widgets.HTML(
                     value=(
                         "<div style='font-family:-apple-system,sans-serif;font-size:12px;"
-                        "color:#3d5248;margin:2px 0 8px 0'>"
-                        "Overhang redesign scores Level 0 with <b>BbsI-HF</b> "
-                        "(BpiI isoschizomer, Pryor 37↔16 °C). Levels −1 and 1 "
-                        "always use the <b>BsaI-HFv2</b> cycling proxy.</div>"
+                        "color:#3d5248;margin:2px 0 8px 0;padding:8px 10px;"
+                        "background:#eef2ef;border-left:4px solid #0f6b4c'>"
+                        "<b>One ligation menu, two enzyme scores.</b><br/>"
+                        "• Levels −1 &amp; 1 are scored with <b>BsaI-HFv2</b> "
+                        "37↔16 °C (Pryor) and reported on the Pareto table.<br/>"
+                        "• Level 0 five-part redesign is scored with <b>BbsI-HF</b> "
+                        "(BpiI isoschizomer) — that Level 0 score is the ligation "
+                        "objective used for search, unless you pick a Potapov "
+                        "Level 0 override."
+                        "</div>"
                     )
                 ),
-                _label("Golden Gate overhangs"),
+                _label("Plasmid / acceptor overhangs (typed · not A–E junctions)"),
                 widgets.HTML(
                     value=(
                         "<div style='font-family:-apple-system,sans-serif;font-size:12px;"
                         "color:#3d5248;margin:2px 0 8px 0'>"
-                        "Enter every overhang 5′→3′. The initial values are the "
-                        "deposited GRASP toolbox interfaces.</div>"
+                        "These are the <b>vector-facing</b> sticky ends for each cloning "
+                        "level (defaults = deposited GRASP toolbox). They are "
+                        "<b>not</b> the internal A–E Level 0 junctions.</div>"
                     )
                 ),
-                _label("Level −1 overhangs"),
+                _label("Level −1 entry vector"),
                 widgets.HBox(
                     [self.level_minus1_5prime, self.level_minus1_3prime]
                 ),
-                _label("Level 0 overhangs"),
+                _label("Level 0 acceptor outer"),
                 widgets.HBox([self.level0_5prime, self.level0_3prime]),
-                _label("Level 1 overhangs"),
+                _label("Level 1 acceptor outer"),
                 widgets.HBox([self.level1_5prime, self.level1_3prime]),
-                _label("Optimizer"),
-                self.redesign,
+                _label("Overhang redesign"),
+                widgets.HTML(
+                    value=(
+                        "<div style='font-family:-apple-system,sans-serif;font-size:12px;"
+                        "color:#3d5248;margin:2px 0 8px 0;padding:8px 10px;"
+                        "background:#fff6e8;border-left:4px solid #e0b872'>"
+                        "<b>Redesign plasmid overhangs</b> (default off): keep the "
+                        "typed Level −1 / 0 / 1 fields above as fixed backbone ends. "
+                        "Turn on only when you intentionally change those fields from "
+                        "the deposited toolbox.<br/><br/>"
+                        "<b>Redesign Level 0 overhangs</b> (default off): Pareto search "
+                        "over the <b>assembled five-part junctions</b> inside ARELF:<br/>"
+                        "A 3′ (ACTC) · B both · C both · D both · E 5′ (TGAA).<br/>"
+                        "Does <b>not</b> move A 5′ / E 3′ acceptor outers or MoClo "
+                        "sites (AGGT / CTTC / TTCG).</div>"
+                    )
+                ),
+                self.redesign_plasmid,
+                self.redesign_level0,
                 self.selection,
+                _label("Optimizer"),
                 self.depth,
                 widgets.HBox(
                     [self.apply_btn, self.reload_btn],
@@ -686,7 +737,9 @@ class GraspControlPanel:
             },
         }
         cfg["overhang_redesign"] = {
-            "enabled": bool(self.redesign.value),
+            "plasmid_overhangs": bool(self.redesign_plasmid.value),
+            "level0_junctions": bool(self.redesign_level0.value),
+            "enabled": bool(self.redesign_level0.value),
             "selection": self.selection.value,
             "cut_mode": "movable_arelf",
             "allowed_arelf_offsets_nt": list(range(12)),
@@ -747,7 +800,14 @@ class GraspControlPanel:
                         parts_df,
                         codon_data,
                         genetic_code=self.config["genetic_code"],
-                        keep_cut_sites=not self.config["overhang_redesign"]["enabled"],
+                        keep_cut_sites=not bool(
+                            self.config.get("overhang_redesign", {}).get(
+                                "level0_junctions",
+                                self.config.get("overhang_redesign", {}).get(
+                                    "enabled", False
+                                ),
+                            )
+                        ),
                         minimum_relative_adaptiveness=self.config[
                             "codon_optimization"
                         ]["minimum_relative_adaptiveness"],
@@ -809,8 +869,10 @@ class GraspControlPanel:
                 f"Synthesis: <b>{self.config['synthesis_vendor']}</b> · "
                 f"GC {synth['global_gc_min']*100:.0f}–{synth['global_gc_max']*100:.0f}% · "
                 f"max HP {synth['max_homopolymer']}<br/>"
-                f"Cut sites: <b>"
-                f"{'KEEP native (AA risk check on)' if not self.config['overhang_redesign']['enabled'] else 'redesign ON (synonymous)'}"
+                f"Plasmid overhangs: <b>"
+                f"{'CUSTOM fields' if self.config['overhang_redesign'].get('plasmid_overhangs') else 'fields as fixed'}"
+                f"</b> · Level 0 junctions: <b>"
+                f"{'REDESIGN A3′/B/C/D/E5′' if self.config['overhang_redesign'].get('level0_junctions', self.config['overhang_redesign'].get('enabled')) else 'KEEP native ACTC/AAGA/GCAC/TGAA'}"
                 f"</b> · depth <b>{self.config['optimizer']['iterations_per_part']:,}</b>"
                 f"{protocol_html}"
             )

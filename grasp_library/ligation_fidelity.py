@@ -39,10 +39,104 @@ def fidelity_calculator_for_level(
         kwargs["min_efficiency"] = min_efficiency
     if min_fidelity is not None:
         kwargs["min_fidelity"] = min_fidelity
-    elif isinstance(protocol.get("protocol_metadata"), Mapping):
-        # Keep calculator defaults unless the caller overrides.
-        pass
     return LigationFidelityCalculator(**kwargs)  # type: ignore[arg-type]
+
+
+def score_grasp_cloning_stages(
+    config: Mapping,
+    *,
+    level0_junction_overhangs: Mapping[str, str] | None = None,
+) -> Dict[str, float]:
+    """Score Levels −1 / 0 / 1 with their enzyme-matched Pryor matrices.
+
+    Level 0 uses BbsI-HF (BpiI isoschizomer) on the six-overhang five-part
+    reaction. Levels −1 and 1 use BsaI-HFv2 on the entry pair and the MoClo
+    block-join set respectively.
+    """
+    from .arelf import selection_overhangs
+    from .assembly_interfaces import (
+        FIVE_PRIME_CODING_SITE,
+        THREE_PRIME_CODING_SITE,
+        resolve_assembly_interfaces,
+    )
+
+    profile = resolve_assembly_interfaces(config)
+    architecture = str(config.get("architecture", "9S")).strip().upper()
+    entry = profile["level_minus1_entry"]
+    level0 = profile["level0"]
+    final = profile["final_cassette"]
+    ppr_outer = level0.get("ppr_outer") or {}
+    acceptor_outer = level0.get("acceptor_outer")
+
+    calc_m1 = fidelity_calculator_for_level(config, "level_minus1")
+    calc_l0 = fidelity_calculator_for_level(config, "level0")
+    calc_l1 = fidelity_calculator_for_level(config, "level1")
+
+    level_minus1 = calc_m1.set_fidelity(
+        calc_m1.grasp_level_minus1_reaction_overhangs(
+            entry_overhangs=(
+                entry[FIVE_PRIME_CODING_SITE],
+                entry[THREE_PRIME_CODING_SITE],
+            )
+        )
+    )
+
+    if level0_junction_overhangs:
+        junctions = selection_overhangs(level0_junction_overhangs)
+    else:
+        junctions = {
+            "J_ACTC": "ACTC",
+            "J_AAGA": "AAGA",
+            "J_GCAC": "GCAC",
+            "J_TGAA": "TGAA",
+        }
+    external = None
+    if acceptor_outer is not None:
+        external = (
+            acceptor_outer[FIVE_PRIME_CODING_SITE],
+            acceptor_outer[THREE_PRIME_CODING_SITE],
+        )
+    level0_score = calc_l0.grasp_first_stage_fidelity(
+        junctions,
+        architecture=architecture,
+        external_overhangs=external,
+    )
+
+    join_sites: list[str] = []
+    junctions_cfg = profile.get("junctions") or {}
+    if architecture in {"14S", "19S"} and "cds1_to_cds14" in junctions_cfg:
+        join_sites.append(junctions_cfg["cds1_to_cds14"]["assembled_coding_site"])
+    if architecture == "19S" and "cds14_to_cds19" in junctions_cfg:
+        join_sites.append(junctions_cfg["cds14_to_cds19"]["assembled_coding_site"])
+    # cds1↔cds2 / terminal join retained on the coding strand as CTTC
+    terminal = junctions_cfg.get("terminal_to_cds2") or junctions_cfg.get("cds1_to_cds2")
+    if terminal is not None:
+        join_sites.append(terminal["assembled_coding_site"])
+    elif "cds1_to_cds2" not in junctions_cfg:
+        join_sites.append("CTTC")
+
+    level1 = calc_l1.set_fidelity(
+        calc_l1.grasp_level1_reaction_overhangs(
+            architecture=architecture,
+            final_cassette_overhangs=(
+                final[FIVE_PRIME_CODING_SITE],
+                final[THREE_PRIME_CODING_SITE],
+            ),
+            ppr_outer_overhangs=(
+                ppr_outer.get(FIVE_PRIME_CODING_SITE, "AGGT"),
+                ppr_outer.get(THREE_PRIME_CODING_SITE, "TTCG"),
+            ),
+            block_join_coding_sites=join_sites,
+        )
+    )
+
+    return {
+        "level_minus1_fidelity": float(level_minus1),
+        "level0_fidelity": float(level0_score),
+        "level1_fidelity": float(level1),
+        # Back-compat alias used by the Pareto objective.
+        "ligation_fidelity": float(level0_score),
+    }
 
 
 class LigationFidelityCalculator:
@@ -234,6 +328,47 @@ class LigationFidelityCalculator:
             )
         left, right = (str(value).upper().replace("U", "T") for value in outer)
         return [left] + [cleaned[j] for j in self.GRASP_LEVEL0_INTERNAL_JUNCTIONS] + [right]
+
+    def grasp_level_minus1_reaction_overhangs(
+        self,
+        *,
+        entry_overhangs: Sequence[str] | None = None,
+    ) -> list[str]:
+        """Two coding-site overhangs for BsaI Level −1 entry cloning."""
+        if entry_overhangs is None:
+            raise ValueError("Level −1 entry overhangs are required")
+        if len(entry_overhangs) != 2:
+            raise ValueError("Level −1 entry overhangs must contain 5′ and 3′ values")
+        return [str(value).upper().replace("U", "T") for value in entry_overhangs]
+
+    def grasp_level1_reaction_overhangs(
+        self,
+        *,
+        architecture: str = "9S",
+        final_cassette_overhangs: Sequence[str] | None = None,
+        ppr_outer_overhangs: Sequence[str] | None = None,
+        block_join_coding_sites: Sequence[str] | None = None,
+    ) -> list[str]:
+        """Overhangs in one Level 1 / MoClo block-join reaction."""
+        architecture = str(architecture).strip().upper()
+        if architecture not in self.GRASP_ARCHITECTURE_GROUPS:
+            raise ValueError(f"Unsupported GRASP architecture {architecture!r}")
+        if final_cassette_overhangs is None or len(final_cassette_overhangs) != 2:
+            raise ValueError("Level 1 final-cassette overhangs require 5′ and 3′ values")
+        if ppr_outer_overhangs is None or len(ppr_outer_overhangs) != 2:
+            raise ValueError("Level 1 PPR-outer overhangs require 5′ and 3′ values")
+        joins = list(block_join_coding_sites or ())
+        left_final, right_final = (
+            str(value).upper().replace("U", "T") for value in final_cassette_overhangs
+        )
+        left_ppr, right_ppr = (
+            str(value).upper().replace("U", "T") for value in ppr_outer_overhangs
+        )
+        return (
+            [left_final, left_ppr]
+            + [str(site).upper().replace("U", "T") for site in joins]
+            + [right_ppr, right_final]
+        )
 
     def grasp_first_stage_fidelities(
         self,

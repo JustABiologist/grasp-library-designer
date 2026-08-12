@@ -238,8 +238,10 @@ def run_overhang_redesign(
     selected = parse_overhang_selection(chosen["overhangs"])
     log(
         f"Selected ({mode}): {chosen['overhangs']}\n"
-        f"  fidelity={chosen['ligation_fidelity']:.4f}  "
-        f"codon={chosen['codon_optimality']:.4f}  "
+        f"  Level0(BbsI-HF)={chosen['ligation_fidelity']:.4f}  "
+        f"Level−1(BsaI-HFv2)={float(chosen.get('level_minus1_fidelity', float('nan'))):.4f}  "
+        f"Level1(BsaI-HFv2)={float(chosen.get('level1_fidelity', float('nan'))):.4f}\n"
+        f"  codon={chosen['codon_optimality']:.4f}  "
         f"synthesis={chosen['synthesis']:.4f}"
     )
 
@@ -509,6 +511,9 @@ def rescore_pareto_front_after_anneal(
         entry = {
             "overhangs": overhangs_text,
             "ligation_fidelity": scores.ligation_fidelity,
+            "level_minus1_fidelity": scores.level_minus1_fidelity,
+            "level0_fidelity": scores.level0_fidelity or scores.ligation_fidelity,
+            "level1_fidelity": scores.level1_fidelity,
             "codon_optimality": scores.codon_optimality,
             "synthesis": scores.synthesis,
             "fidelity_beam": getattr(row, "fidelity_beam", scores.ligation_fidelity),

@@ -18,16 +18,24 @@ from .dna import (
     longest_homopolymer,
     repeated_kmer_penalty,
 )
-from .ligation_fidelity import LigationFidelityCalculator
+from .ligation_fidelity import LigationFidelityCalculator, score_grasp_cloning_stages
 
 
 @dataclass(frozen=True)
 class ObjectiveScores:
-    """All three objectives are maximized."""
+    """All three Pareto objectives are maximized.
+
+    ``ligation_fidelity`` is the Level 0 (BbsI-HF / BpiI) reaction score used
+    for redesign search. Stage-matched BsaI-HFv2 scores for Levels −1 and 1 are
+    reported alongside but do not enter the three-objective dominance test.
+    """
 
     ligation_fidelity: float
     codon_optimality: float
     synthesis: float
+    level_minus1_fidelity: float = 1.0
+    level0_fidelity: float = 0.0
+    level1_fidelity: float = 1.0
 
     def as_tuple(self) -> tuple[float, float, float]:
         return (
@@ -37,7 +45,10 @@ class ObjectiveScores:
         )
 
     def as_dict(self) -> dict:
-        return asdict(self)
+        payload = asdict(self)
+        if not payload["level0_fidelity"]:
+            payload["level0_fidelity"] = payload["ligation_fidelity"]
+        return payload
 
 
 def codon_optimality_score(
@@ -395,30 +406,19 @@ def evaluate_design(
     calc = fidelity_calculator or LigationFidelityCalculator(
         temperature=config.get("ligation", {}).get("temperature", 25),
         hours=config.get("ligation", {}).get("hours", 18),
+        ligation_table=config.get("ligation", {}).get("ligation_table"),
     )
 
+    level_minus1_fidelity = 1.0
+    level1_fidelity = 1.0
     if isinstance(overhangs, Mapping) and overhangs:
-        from .assembly_interfaces import (
-            FIVE_PRIME_CODING_SITE,
-            THREE_PRIME_CODING_SITE,
-            resolve_assembly_interfaces,
+        stage_scores = score_grasp_cloning_stages(
+            config,
+            level0_junction_overhangs=overhangs,
         )
-
-        assembly_profile = resolve_assembly_interfaces(config)
-        configured_outer = assembly_profile["level0"].get("acceptor_outer")
-        external_overhangs = (
-            (
-                configured_outer[FIVE_PRIME_CODING_SITE],
-                configured_outer[THREE_PRIME_CODING_SITE],
-            )
-            if configured_outer is not None
-            else None
-        )
-        fidelity = calc.grasp_first_stage_fidelity(
-            overhangs,
-            architecture=str(config.get("architecture", "9S")),
-            external_overhangs=external_overhangs,
-        )
+        fidelity = float(stage_scores["level0_fidelity"])
+        level_minus1_fidelity = float(stage_scores["level_minus1_fidelity"])
+        level1_fidelity = float(stage_scores["level1_fidelity"])
     elif overhangs:
         fidelity = calc.set_fidelity(overhangs)
     else:
@@ -459,4 +459,7 @@ def evaluate_design(
         ligation_fidelity=fidelity,
         codon_optimality=codon,
         synthesis=synthesis,
+        level_minus1_fidelity=level_minus1_fidelity,
+        level0_fidelity=fidelity,
+        level1_fidelity=level1_fidelity,
     )

@@ -33,6 +33,8 @@ def apply_form_settings(
     assembly_enzyme: str,
     ligation_table: str,
     overhang_redesign: bool = False,
+    redesign_plasmid_overhangs: bool = False,
+    redesign_level0_junctions: Optional[bool] = None,
     redesign_selection: str = "knee",
     assembly_interface_preset: str = "auto",
     level_minus1_5prime_overhang: str = "ACAT",
@@ -191,8 +193,15 @@ def apply_form_settings(
             THREE_PRIME_CODING_SITE: reverse_complement(level1_3prime),
         },
     }
+    level0_on = (
+        bool(overhang_redesign)
+        if redesign_level0_junctions is None
+        else bool(redesign_level0_junctions)
+    )
     cfg["overhang_redesign"] = {
-        "enabled": bool(overhang_redesign),
+        "plasmid_overhangs": bool(redesign_plasmid_overhangs),
+        "level0_junctions": level0_on,
+        "enabled": level0_on,
         "selection": redesign_selection,
         "cut_mode": "movable_arelf",
         "allowed_arelf_offsets_nt": list(range(12)),

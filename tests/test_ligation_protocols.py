@@ -13,6 +13,7 @@ from grasp_library.ligation_fidelity import (
 )
 from grasp_library.synthesis_vendors import (
     GRASP_LIGATION_BY_LEVEL,
+    GRASP_STAGE_MATCHED_LIGATION,
     LEVEL0_LIGATION,
     LEVEL1_LIGATION,
     LEVEL_MINUS1_LIGATION,
@@ -65,8 +66,6 @@ def test_set_score_is_geometric_mean_and_orientation_invariant() -> None:
 
 
 def test_fixed_grasp_overhangs_are_not_removed_by_candidate_filter() -> None:
-    # TGAA is below the default efficiency cutoff in this dataset. It remains
-    # part of the physical reaction score while staying out of design choices.
     calc = LigationFidelityCalculator(temperature=37, hours=18)
 
     assert "TGAA" not in calc.efficient_overhangs()
@@ -85,22 +84,17 @@ def test_three_base_table_is_rejected_for_grasp_scoring() -> None:
         LigationFidelityCalculator(ligation_table="SapI.csv")
 
 
-def test_dashboard_exposes_level_matched_four_base_protocols() -> None:
+def test_dashboard_exposes_combined_stage_matched_ligation_choice() -> None:
     names = ligation_table_names()
     redesign = redesign_ligation_table_names()
 
-    assert names[:3] == [
-        LEVEL_MINUS1_LIGATION,
-        LEVEL0_LIGATION,
-        LEVEL1_LIGATION,
-    ]
-    assert redesign[0] == LEVEL0_LIGATION
-    assert LEVEL_MINUS1_LIGATION not in redesign
-    assert LEVEL1_LIGATION not in redesign
-    assert all("SapI" not in name for name in names)
-    assert all("constant 37" not in name for name in names)
-    assert all("constant 42" not in name for name in names)
-    assert "T4 ligase only · 1 h · 37 °C (Potapov 2018)" in names
+    assert LEVEL_MINUS1_LIGATION in names
+    assert LEVEL0_LIGATION in names
+    assert LEVEL1_LIGATION in names
+    assert redesign[0] == GRASP_STAGE_MATCHED_LIGATION
+    assert all("BbsI-HF" in redesign[0] and "BsaI-HFv2" in redesign[0] for _ in [0])
+    assert all(name.startswith("Level 0 override only") for name in redesign[1:])
+    assert all("SapI" not in name for name in redesign)
 
 
 @pytest.mark.parametrize(
@@ -137,26 +131,45 @@ def test_cycling_proxy_metadata_is_not_relabelled_as_static_ligation(
     assert "supplementary" in metadata["source_url"]
 
 
-def test_selected_protocol_metadata_is_preserved_in_config() -> None:
-    updated = apply_ligation_table_to_config({"ligation": {}}, LEVEL0_LIGATION)
+def test_stage_matched_choice_keeps_both_enzyme_matrices() -> None:
+    updated = apply_ligation_table_to_config(
+        {"ligation": {}}, GRASP_STAGE_MATCHED_LIGATION
+    )
     ligation = updated["ligation"]
 
-    assert ligation["temperature"] is None
-    assert ligation["hours"] is None
+    assert ligation["table_name"] == GRASP_STAGE_MATCHED_LIGATION
     assert ligation["ligation_table"] == "BbsI-HF.csv"
-    assert ligation["protocol_metadata"]["assay_kind"] == "golden_gate_cycling"
-    assert ligation["protocol_metadata"]["proxy_for"].startswith("GRASP Level 0")
     assert ligation["by_level"]["level_minus1"]["ligation_table"] == "BsaI-HFv2.csv"
     assert ligation["by_level"]["level0"]["ligation_table"] == "BbsI-HF.csv"
     assert ligation["by_level"]["level1"]["ligation_table"] == "BsaI-HFv2.csv"
     assert GRASP_LIGATION_BY_LEVEL["level_minus1"] == LEVEL_MINUS1_LIGATION
 
 
+def test_score_grasp_cloning_stages_uses_enzyme_matched_matrices(tmp_path) -> None:
+    from grasp_library.control_panel import build_default_config
+    from grasp_library.ligation_fidelity import score_grasp_cloning_stages
+
+    cfg = build_default_config(tmp_path)
+    scores = score_grasp_cloning_stages(cfg)
+    assert set(scores) >= {
+        "level_minus1_fidelity",
+        "level0_fidelity",
+        "level1_fidelity",
+        "ligation_fidelity",
+    }
+    assert scores["ligation_fidelity"] == scores["level0_fidelity"]
+    assert 0.0 < scores["level_minus1_fidelity"] <= 1.0
+    assert 0.0 < scores["level0_fidelity"] <= 1.0
+    assert 0.0 < scores["level1_fidelity"] <= 1.0
+    # Entry cloning (2 overhangs, BsaI) should not equal the six-overhang Level 0 tube.
+    assert scores["level_minus1_fidelity"] != scores["level0_fidelity"]
+
+
 def test_selecting_bsai_level_does_not_retarget_level0_redesign() -> None:
     updated = apply_ligation_table_to_config({"ligation": {}}, LEVEL1_LIGATION)
 
     assert updated["ligation"]["ligation_table"] == "BbsI-HF.csv"
-    assert updated["ligation"]["table_name"] == LEVEL0_LIGATION
+    assert updated["ligation"]["resolved_table_name"] == LEVEL0_LIGATION
     assert updated["ligation"]["by_level"]["level1"]["ligation_table"] == "BsaI-HFv2.csv"
 
 

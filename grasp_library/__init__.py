@@ -3,6 +3,7 @@
 from .ligation_fidelity import (
     LigationFidelityCalculator,
     fidelity_calculator_for_level,
+    score_grasp_cloning_stages,
 )
 from .assembly_interfaces import (
     build_order_fragment,
@@ -56,6 +57,7 @@ from .import_grasp import (
 from .synthesis_vendors import (
     ASSEMBLY_ENZYMES,
     GRASP_LIGATION_BY_LEVEL,
+    GRASP_STAGE_MATCHED_LIGATION,
     LEVEL0_LIGATION,
     LEVEL1_LIGATION,
     LEVEL_MINUS1_LIGATION,
@@ -69,6 +71,7 @@ from .synthesis_vendors import (
     ligation_protocol_for_level,
     ligation_table_names,
     redesign_ligation_table_names,
+    resolve_dashboard_ligation_choice,
     twist_length_advice,
     vendor_names,
 )
@@ -115,11 +118,12 @@ try:
 
     __version__ = version("grasp-library-designer")
 except PackageNotFoundError:  # pragma: no cover - editable/source tree
-    __version__ = "0.1.10"
+    __version__ = "0.1.11"
 
 __all__ = [
     "LigationFidelityCalculator",
     "fidelity_calculator_for_level",
+    "score_grasp_cloning_stages",
     "build_order_fragment",
     "custom_interface_preset",
     "deposited_grasp_interface_preset",
@@ -160,6 +164,7 @@ __all__ = [
     "ASSEMBLY_ENZYMES",
     "LIGATION_TABLES",
     "GRASP_LIGATION_BY_LEVEL",
+    "GRASP_STAGE_MATCHED_LIGATION",
     "LEVEL_MINUS1_LIGATION",
     "LEVEL0_LIGATION",
     "LEVEL1_LIGATION",
@@ -169,6 +174,7 @@ __all__ = [
     "redesign_ligation_table_names",
     "grasp_ligation_by_level",
     "ligation_protocol_for_level",
+    "resolve_dashboard_ligation_choice",
     "apply_vendor_to_config",
     "apply_enzyme_to_config",
     "apply_ligation_table_to_config",
