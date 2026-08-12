@@ -13,8 +13,8 @@ _RNA_TO_CODE = {
     "T": ("N", "D"),
 }
 
-# Solvating N-helix from Farley et al. GRASP 9S native assemblies
-NTERM_HELIX = "QGGNSEEPRKSFDERPERGVVS"
+# 5′-side solvating helix from Farley et al. GRASP 9S native assemblies
+FIVE_PRIME_SOLVATING_HELIX = "QGGNSEEPRKSFDERPERGVVS"
 
 # One ~31-aa PPR-like repeat; only the W?AM 5th and PER? last positions vary
 REPEAT_TEMPLATE = "W{fifth}AMISGYAQNGRIDEARELFDKMPER{last}VVS"
@@ -51,7 +51,7 @@ def rna_to_binder_aa(target_rna: str) -> str:
     the validated GRASP repeat scaffold (matches oh-bounded native 9S assemblies).
     """
     pairs = rna_to_ppr_pairs(target_rna)
-    parts = [NTERM_HELIX]
+    parts = [FIVE_PRIME_SOLVATING_HELIX]
     for fifth, last in pairs:
         parts.append(REPEAT_TEMPLATE.format(fifth=fifth, last=last))
     return "".join(parts)

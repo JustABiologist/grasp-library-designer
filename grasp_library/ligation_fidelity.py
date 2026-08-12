@@ -203,7 +203,9 @@ class LigationFidelityCalculator:
         }
         outer = tuple(external_overhangs or self.GRASP_LEVEL0_EXTERNAL_OVERHANGS)
         if len(outer) != 2:
-            raise ValueError("Level 0 external_overhangs must contain N and C values")
+            raise ValueError(
+                "Level 0 external_overhangs must contain 5′ and 3′ values"
+            )
         left, right = (str(value).upper().replace("U", "T") for value in outer)
         return [left] + [cleaned[j] for j in self.GRASP_LEVEL0_INTERNAL_JUNCTIONS] + [right]
 

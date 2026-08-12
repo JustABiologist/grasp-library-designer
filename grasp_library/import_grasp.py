@@ -20,6 +20,10 @@ from Bio.Seq import Seq
 warnings.simplefilter("ignore", BiopythonParserWarning)
 
 from .assembly_interfaces import (
+    FIVE_PRIME_CODING_SITE,
+    FIVE_PRIME_END,
+    THREE_PRIME_CODING_SITE,
+    THREE_PRIME_END,
     build_order_fragment,
     deposited_grasp_interface_preset,
     order_fragment_arms,
@@ -49,14 +53,20 @@ _DEPOSITED_INTERFACES = deposited_grasp_interface_preset()
 _DEPOSITED_PREFIX, _DEPOSITED_SUFFIX = order_fragment_arms(_DEPOSITED_INTERFACES)
 PAGM1311_ORDER_5P_ARM = _DEPOSITED_PREFIX[:-4]
 PAGM1311_ORDER_3P_ARM = _DEPOSITED_SUFFIX[4:]
-PAGM1311_INSERT_5P_FUSION = _DEPOSITED_INTERFACES["level_minus1_entry"]["n_overhang_5p"]
-PAGM1311_INSERT_3P_FUSION = reverse_complement(
-    _DEPOSITED_INTERFACES["level_minus1_entry"]["c_overhang_5p"]
-)
+PAGM1311_INSERT_5P_FUSION = _DEPOSITED_INTERFACES["level_minus1_entry"][
+    FIVE_PRIME_CODING_SITE
+]
+PAGM1311_INSERT_3P_FUSION = _DEPOSITED_INTERFACES["level_minus1_entry"][
+    THREE_PRIME_CODING_SITE
+]
 PAGM1311_BACKBONE_5P_CONTEXT = _DEPOSITED_INTERFACES["level_minus1_entry"]["completion_context_5p"]
 PAGM1311_BACKBONE_3P_CONTEXT = _DEPOSITED_INTERFACES["level_minus1_entry"]["completion_context_3p"]
-PAGM9121_EXTERNAL_5P_OVERHANG = _DEPOSITED_INTERFACES["level0"]["acceptor_outer"]["n_overhang_5p"]
-PAGM9121_EXTERNAL_3P_OVERHANG = _DEPOSITED_INTERFACES["level0"]["acceptor_outer"]["c_overhang_5p"]
+PAGM9121_EXTERNAL_5P_OVERHANG = _DEPOSITED_INTERFACES["level0"][
+    "acceptor_outer"
+][FIVE_PRIME_CODING_SITE]
+PAGM9121_EXTERNAL_3P_OVERHANG = _DEPOSITED_INTERFACES["level0"][
+    "acceptor_outer"
+][THREE_PRIME_CODING_SITE]
 
 
 def build_configured_order_fragment(
@@ -84,9 +94,9 @@ def build_configured_order_fragment(
     outer = profile["level0"].get("acceptor_outer")
     role = str(part_id).split("_", 1)[0]
     if outer is not None and role.endswith("A"):
-        payload = outer["n_overhang_5p"] + payload
+        payload = outer[FIVE_PRIME_CODING_SITE] + payload
     if outer is not None and role.endswith("E"):
-        payload = payload + outer["c_overhang_5p"]
+        payload = payload + outer[THREE_PRIME_CODING_SITE]
     return build_order_fragment(payload, profile)
 
 
@@ -117,16 +127,16 @@ def build_pagm1311_order_fragment(
 # assembly.  AGGT/CTTC/TTCG are later-stage BsaI/MoClo fusion interfaces and are
 # deliberately not eligible for redesign.
 JUNCTION_ORDER_9S = [
-    ("J_Nterm", "AGGT"),  # 1A 5′ (AGGT preferred; AATG alternate)
+    ("J_5prime", "AGGT"),  # 1A 5′ (AGGT preferred; AATG alternate)
     ("J_ACTC", "ACTC"),  # 1A/2A 3′ ↔ B 5′
     ("J_AAGA", "AAGA"),  # B 3′ ↔ C 5′
     ("J_GCAC", "GCAC"),  # C 3′ ↔ D 5′
     ("J_TGAA", "TGAA"),  # D 3′ ↔ 1E/2E 5′
     # ``CTTC`` is the sequence retained on the assembled coding strand.  In
-    # directional terminal-5′ notation the physical pair is 1E C = CTTC and
-    # 2A N = GAAG.  Keep those concepts separate in the imported metadata.
+    # physical-end notation the 1E 3′ end is GAAG and the 2A 5′ end is CTTC.
+    # Keep those concepts separate in the imported metadata.
     ("J_CTTC", "CTTC"),  # 1E coding-site 3′ ↔ 2A coding-site 5′
-    ("J_Cterm", "TTCG"),  # 2E 3′
+    ("J_3prime", "TTCG"),  # 2E 3′
 ]
 
 # Each binding architecture is first assembled as five-part Level 0 blocks,
@@ -164,21 +174,21 @@ STANDARD_CODONS = CodonTable.unambiguous_dna_by_id[1]
 
 
 _INTERBLOCK_TERMINALS = {
-    "1E": (None, "terminal_to_cds2", "upstream_c_5p"),
-    "2A": ("terminal_to_cds2", None, "downstream_n_5p"),
-    "14E": (None, "cds1_to_cds14", "upstream_c_5p"),
-    "14A": ("cds1_to_cds14", None, "downstream_n_5p"),
-    "19E": (None, "cds14_to_cds19", "upstream_c_5p"),
-    "19A": ("cds14_to_cds19", None, "downstream_n_5p"),
+    "1E": (None, "terminal_to_cds2"),
+    "2A": ("terminal_to_cds2", None),
+    "14E": (None, "cds1_to_cds14"),
+    "14A": ("cds1_to_cds14", None),
+    "19E": (None, "cds14_to_cds19"),
+    "19A": ("cds14_to_cds19", None),
 }
 
 
-def _part_terminal_overhangs(
+def _part_end_overhangs(
     part_id: str,
     oh5_coding_site: str,
     oh3_coding_site: str,
 ) -> Tuple[str, str]:
-    """Return physical N/C terminal labels without changing coding sites.
+    """Return physical 5′/3′ end labels without changing coding sites.
 
     Deposited GenBank annotations are top/coding-strand sequence windows.  At
     an inter-block junction both adjacent windows therefore contain the same
@@ -186,26 +196,26 @@ def _part_terminal_overhangs(
     conventionally written 5′-to-3′ as a reverse-complement pair (CTTC/GAAG).
     """
     role = str(part_id).split("_", 1)[0]
-    n_terminal = oh5_coding_site
-    c_terminal = oh3_coding_site
+    five_prime_end = oh5_coding_site
+    three_prime_end = reverse_complement(oh3_coding_site)
     mapping = _INTERBLOCK_TERMINALS.get(role)
     if mapping is None:
-        return n_terminal, c_terminal
+        return five_prime_end, three_prime_end
 
-    n_junction, c_junction, directional_key = mapping
-    junction_name = n_junction or c_junction
+    five_prime_junction, three_prime_junction = mapping
+    junction_name = five_prime_junction or three_prime_junction
     junction = _DEPOSITED_INTERFACES["junctions"][junction_name]
     canonical_key = (
         "downstream_five_prime_end_overhang"
-        if n_junction is not None
+        if five_prime_junction is not None
         else "upstream_three_prime_end_overhang"
     )
-    terminal = junction.get(canonical_key, junction[directional_key])
-    if n_junction is not None:
-        n_terminal = terminal
+    end_overhang = junction[canonical_key]
+    if five_prime_junction is not None:
+        five_prime_end = end_overhang
     else:
-        c_terminal = terminal
-    return n_terminal, c_terminal
+        three_prime_end = end_overhang
+    return five_prime_end, three_prime_end
 
 
 def _feature_label(feature) -> str:
@@ -343,7 +353,7 @@ def load_grasp_records(genbank_paths: Sequence[Path]) -> List[dict]:
             prefix, suffix = _flanks(parsed, window["start"], window["end"])
             dna = window["dna"]
             part_id = _part_id_from_name(parsed["name"])
-            n_terminal, c_terminal = _part_terminal_overhangs(
+            five_prime_end, three_prime_end = _part_end_overhangs(
                 part_id,
                 window["oh5"],
                 window["oh3"],
@@ -368,8 +378,8 @@ def load_grasp_records(genbank_paths: Sequence[Path]) -> List[dict]:
                     "oh3": window["oh3"],
                     "oh5_coding_site_5to3": window["oh5"],
                     "oh3_coding_site_5to3": window["oh3"],
-                    "n_terminal_overhang_5p": n_terminal,
-                    "c_terminal_overhang_5p": c_terminal,
+                    FIVE_PRIME_END: five_prime_end,
+                    THREE_PRIME_END: three_prime_end,
                     "overhang_notation": "assembled_coding_strand_site",
                     "oh5_mask_start": window["oh5_pos"],
                     "oh3_mask_start": window["oh3_pos"],
@@ -431,11 +441,11 @@ def build_parts_table(records: Sequence[dict]) -> pd.DataFrame:
             "oh3": r["oh3"],
             "oh5_coding_site_5to3": r.get("oh5_coding_site_5to3", r["oh5"]),
             "oh3_coding_site_5to3": r.get("oh3_coding_site_5to3", r["oh3"]),
-            "n_terminal_overhang_5p": r.get(
-                "n_terminal_overhang_5p", r["oh5"]
+            FIVE_PRIME_END: r.get(
+                FIVE_PRIME_END, r["oh5"]
             ),
-            "c_terminal_overhang_5p": r.get(
-                "c_terminal_overhang_5p", r["oh3"]
+            THREE_PRIME_END: r.get(
+                THREE_PRIME_END, reverse_complement(r["oh3"])
             ),
             "overhang_notation": r.get(
                 "overhang_notation", "assembled_coding_strand_site"
@@ -451,7 +461,7 @@ def build_parts_table(records: Sequence[dict]) -> pd.DataFrame:
 def build_junction_map_9s(records: Sequence[dict]) -> pd.DataFrame:
     """Map each 9S junction onto every part that carries that overhang."""
     by_id = {r["part_id"]: r for r in records}
-    # Prefer AGGT 1A variants for N-term junction ownership; still list AATG parts.
+    # Prefer AGGT 1A variants for 5′ junction ownership; still list AATG parts.
     rows = []
 
     def add(junction: str, part_id: str, which: str):
@@ -459,9 +469,9 @@ def build_junction_map_9s(records: Sequence[dict]) -> pd.DataFrame:
         start = rec["oh5_mask_start"] if which == "5" else rec["oh3_mask_start"]
         oh = rec["oh5"] if which == "5" else rec["oh3"]
         terminal = (
-            rec.get("n_terminal_overhang_5p", oh)
+            rec.get(FIVE_PRIME_END, oh)
             if which == "5"
-            else rec.get("c_terminal_overhang_5p", oh)
+            else rec.get(THREE_PRIME_END, reverse_complement(oh))
         )
         rows.append(
             {
@@ -470,7 +480,7 @@ def build_junction_map_9s(records: Sequence[dict]) -> pd.DataFrame:
                 "mask_start_0based": int(start),
                 "native_overhang": oh,
                 "assembled_coding_site_5to3": oh,
-                "directional_terminal_5p": terminal,
+                "physical_end_overhang_5to3": terminal,
                 "end": "5prime" if which == "5" else "3prime",
             }
         )
@@ -479,12 +489,12 @@ def build_junction_map_9s(records: Sequence[dict]) -> pd.DataFrame:
         role = part_id.split("_")[0]
         oh5, oh3 = rec["oh5"], rec["oh3"]
 
-        # Prefer AGGT N-terminal fusion (MoClo standard); AATG variants stay in parts.csv
+        # Prefer the AGGT 5′ fusion (MoClo standard); AATG variants stay in parts.csv
         # but are not part of the default redesign junction.
         if part_id.startswith("1A_") and oh5 == "AGGT":
-            add("J_Nterm", part_id, "5")
+            add("J_5prime", part_id, "5")
         if part_id.startswith("2E_") and oh3 == "TTCG":
-            add("J_Cterm", part_id, "3")
+            add("J_3prime", part_id, "3")
 
         # Every A extension feeds the shared B/C/D core.
         if role in {"1A", "2A", "14A", "19A"} and oh3 == "ACTC":
@@ -646,7 +656,7 @@ def part_prefixes(length: int) -> List[str]:
 def pick_parts_for_target(
     target_rna: str,
     *,
-    nterm_overhang: str = "AGGT",
+    five_prime_fusion_site: str = "AGGT",
 ) -> List[str]:
     """Return part_id list for a 9/14/19-base binding target (GAP logic)."""
     target_rna = target_rna.upper().replace("T", "U")
@@ -674,7 +684,7 @@ def pick_parts_for_target(
             raise ValueError(f"Unexpected GAP code {code!r} at slot {i}")
         suffix = code_compute[code_part.index(code)]
         if prefix == "1A":
-            part_ids.append(f"1A{suffix}_{nterm_overhang}")
+            part_ids.append(f"1A{suffix}_{five_prime_fusion_site}")
         else:
             part_ids.append(f"{prefix}{suffix}")
     return part_ids
@@ -808,8 +818,8 @@ def import_grasp_profile(
             "oligo_suffix",
             "oh5_coding_site_5to3",
             "oh3_coding_site_5to3",
-            "n_terminal_overhang_5p",
-            "c_terminal_overhang_5p",
+            FIVE_PRIME_END,
+            THREE_PRIME_END,
             "overhang_notation",
             "oh5_mask_start",
             "oh3_mask_start",
@@ -840,9 +850,11 @@ The CSV junction coordinates record the deposited design. Runtime redesign is
 not tied to those indices: every synonymous four-base window fully inside the
 invariant ARELF motif (offsets 0–11) is eligible.
 
-Order fragments use configurable BsaI Level -1 entry interfaces, configurable
-BpiI Level 0 block interfaces, and configurable final cassette interfaces. The
-deposited GRASP preset remains available as pAGM1311 -> pAGM9121.
+Order fragments use configurable physical 5′ and 3′ overhangs at each cloning
+level. The deposited defaults are Level −1 `ACAT/ACAA`, Level 0 `CTCA/CTCG`,
+and Level 1 `GGAG/AGCG`, with every value written 5′→3′. Retained coding-strand
+sites and internal architecture junctions are derived. The deposited workflow
+uses pAGM1311 followed by pAGM9121.
 
 Deposited-preset order-strand geometry:
 TTTGGTCTCAACAT{{pAGM1311 insert}}TTGTTGAGACCAAA
@@ -868,7 +880,7 @@ def compile_target_gap(
     target_rna: str,
     *,
     architecture: str = "9S",
-    nterm_overhang: str = "AGGT",
+    five_prime_fusion_site: str = "AGGT",
 ) -> pd.DataFrame:
     """Compile a binding-site RNA into ordered GRASP part_ids (GAP algorithm).
 
@@ -903,7 +915,9 @@ def compile_target_gap(
             f"binding target; received {len(rna)} bases"
         )
 
-    part_ids = pick_parts_for_target(rna, nterm_overhang=nterm_overhang)
+    part_ids = pick_parts_for_target(
+        rna, five_prime_fusion_site=five_prime_fusion_site
+    )
     assembly_groups = tuple(layout["assembly_groups"])
     groups = [group for group in assembly_groups for _ in range(5)]
     orders = list(range(1, 6)) * len(assembly_groups)

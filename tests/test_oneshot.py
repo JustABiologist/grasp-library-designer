@@ -77,7 +77,7 @@ def test_all_42_deposited_parts_reconstruct_valid_entry_fragments(inputs):
         ("G" * 19, "19S", "AGGT;GTGA;CACG;CTTC;TTCG"),
     ],
 )
-def test_oneshot_exports_custom_vector_requirements_and_ppr_chain(
+def test_oneshot_exports_standard_grasp_requirements_and_ppr_chain(
     inputs, tmp_path, target, architecture, interfaces
 ):
     _, codon_data, config = inputs
@@ -91,24 +91,33 @@ def test_oneshot_exports_custom_vector_requirements_and_ppr_chain(
     )
 
     assert result["summary"]["architecture"] == architecture
-    assert result["summary"]["entry_vector"] == "Custom Level -1 entry vector"
-    assert result["summary"]["level0_acceptor"] == "Custom Level 0 acceptor"
-    assert result["summary"]["entry_five_prime_end_overhang"] == "AACA"
-    assert result["summary"]["entry_three_prime_end_overhang"] == "GGAG"
-    assert result["summary"]["entry_three_prime_assembled_coding_site"] == "CTCC"
+    assert result["summary"]["entry_vector"] == "pAGM1311"
+    assert result["summary"]["level0_acceptor"] == "pAGM9121"
+    assert result["summary"]["entry_five_prime_end_overhang"] == "ACAT"
+    assert result["summary"]["entry_three_prime_end_overhang"] == "ACAA"
+    assert result["summary"]["entry_three_prime_assembled_coding_site"] == "TTGT"
     assert result["summary"][
         "final_cassette_five_prime_end_overhang"
-    ] == "GCCC"
+    ] == "GGAG"
     assert result["summary"][
         "final_cassette_three_prime_end_overhang"
-    ] == "GCGA"
+    ] == "AGCG"
     assert result["summary"]["translation_verified"] is True
     assert len(result["level0_assemblies"]) == len(interfaces.split(";")) - 1
     assert result["level0_assemblies"][
         "level0_module_chain_in_silico_validated"
     ].all()
-    assert set(result["level0_assemblies"]["level0_outer_left_5to3"]) == {"CTCA"}
-    assert set(result["level0_assemblies"]["level0_outer_right_5to3"]) == {"CGAG"}
+    assert set(result["level0_assemblies"]["level0_five_prime_end_overhang"]) == {
+        "CTCA"
+    }
+    assert set(result["level0_assemblies"]["level0_three_prime_end_overhang"]) == {
+        "CTCG"
+    }
+    assert set(
+        result["level0_assemblies"][
+            "level0_three_prime_assembled_coding_site"
+        ]
+    ) == {"CGAG"}
     assert result["ppr_block_chain"]["ppr_interface_chain"] == interfaces
     assert result["ppr_block_chain"][
         "ppr_block_chain_in_silico_validated"
@@ -117,10 +126,10 @@ def test_oneshot_exports_custom_vector_requirements_and_ppr_chain(
     assert result["summary"]["entry_vector_sequence_in_silico_validated"] is False
     assert result["summary"]["standalone_expression_cassette"] is False
     assert result["orderable_fragments"]["order_sequence_5to3"].str.startswith(
-        "TTTGGTCTCAAACA"
+        "TTTGGTCTCAACAT"
     ).all()
     assert result["orderable_fragments"]["order_sequence_5to3"].str.endswith(
-        "CTCCTGAGACCAAA"
+        "TTGTTGAGACCAAA"
     ).all()
     assert result["orderable_fragments"]["order_sequence_5to3"].str.count(
         "GGTCTC"
@@ -188,12 +197,11 @@ def test_oneshot_deposited_grasp_preset_is_explicit(inputs, tmp_path):
 def test_oneshot_honors_configured_level0_block_interface(inputs, tmp_path):
     _, codon_data, default_config = inputs
     config = copy.deepcopy(default_config)
-    junction = config["assembly_interfaces"]["level0"]["block_junctions"][
-        "cds1_to_cds2"
-    ]
+    junction = config["assembly_interfaces"]["junctions"]["terminal_to_cds2"]
     junction.update(
-        upstream_c="ATTC",
-        downstream_n="GAAT",
+        upstream_three_prime_end_overhang="GAAT",
+        downstream_five_prime_end_overhang="ATTC",
+        assembled_coding_site="ATTC",
         arelf_offset_nt=11,
     )
     result = run_oneshot_design(
@@ -207,6 +215,72 @@ def test_oneshot_honors_configured_level0_block_interface(inputs, tmp_path):
 
     assert result["ppr_block_chain"]["ppr_interface_chain"] == "AGGT;ATTC;TTCG"
     assert result["summary"]["ppr_block_chain_in_silico_validated"] is True
+
+
+def test_oneshot_derives_coding_sites_from_all_six_configured_physical_ends(
+    inputs, tmp_path
+):
+    _, codon_data, default_config = inputs
+    config = copy.deepcopy(default_config)
+    assembly = config["assembly_interfaces"]
+    assembly["preset"] = "custom"
+    assembly["level_minus1_entry"].update(
+        profile="custom",
+        vector_name="custom_level_minus1_entry",
+        five_prime_end_overhang="AAAA",
+        three_prime_end_overhang="CCCC",
+        five_prime_assembled_coding_site="AAAA",
+        three_prime_assembled_coding_site="GGGG",
+    )
+    assembly["level0"]["acceptor_name"] = "custom_level0_acceptor"
+    assembly["level0"]["acceptor_outer"].update(
+        five_prime_end_overhang="ATGC",
+        three_prime_end_overhang="CGTA",
+        five_prime_assembled_coding_site="ATGC",
+        three_prime_assembled_coding_site="TACG",
+    )
+    assembly["level1"].update(
+        acceptor_name="custom_level1_acceptor",
+        five_prime_end_overhang="ACGT",
+        three_prime_end_overhang="TGCA",
+        five_prime_assembled_coding_site="ACGT",
+        three_prime_assembled_coding_site="TGCA",
+    )
+
+    result = run_oneshot_design(
+        target_rna="UUACACGUG",
+        codon_data=codon_data,
+        config=config,
+        output_dir=tmp_path,
+        seed=42,
+        log=lambda *_: None,
+    )
+
+    summary = result["summary"]
+    assert summary["entry_five_prime_end_overhang"] == "AAAA"
+    assert summary["entry_three_prime_end_overhang"] == "CCCC"
+    assert summary["entry_three_prime_assembled_coding_site"] == "GGGG"
+    assert summary["final_cassette_five_prime_end_overhang"] == "ACGT"
+    assert summary["final_cassette_three_prime_end_overhang"] == "TGCA"
+    assert set(result["level0_assemblies"]["level0_five_prime_end_overhang"]) == {
+        "ATGC"
+    }
+    assert set(result["level0_assemblies"]["level0_three_prime_end_overhang"]) == {
+        "CGTA"
+    }
+    assert set(
+        result["level0_assemblies"][
+            "level0_three_prime_assembled_coding_site"
+        ]
+    ) == {
+        "TACG"
+    }
+    assert result["orderable_fragments"]["order_sequence_5to3"].str.startswith(
+        "TTTGGTCTCAAAAA"
+    ).all()
+    assert result["orderable_fragments"]["order_sequence_5to3"].str.endswith(
+        "GGGGTGAGACCAAA"
+    ).all()
 
 
 def test_invalid_target_characters_are_not_silently_deleted():

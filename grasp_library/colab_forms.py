@@ -11,6 +11,7 @@ from .assembly_interfaces import (
     FIVE_PRIME_END,
     THREE_PRIME_CODING_SITE,
     THREE_PRIME_END,
+    deposited_grasp_interface_preset,
 )
 from .codon_tables import apply_organism_codon_table, load_codon_usage
 from .sample_codon_tables import SAMPLE_CODON_TABLES, UPLOAD_OWN_TABLE
@@ -27,51 +28,28 @@ def apply_form_settings(
     organism: str,
     genetic_code: int,
     target_rna: str,
-    nterm_overhang: str = "AGGT",
     architecture: str = "9S",
     synthesis_vendor: str,
     assembly_enzyme: str,
     ligation_table: str,
     overhang_redesign: bool = False,
     redesign_selection: str = "knee",
-    assembly_interface_preset: str = "custom",
-    entry_vector_name: str = "Custom Level -1 entry vector",
-    entry_n_overhang: str = "AACA",
-    entry_c_overhang: str = "GGAG",
-    level0_acceptor_name: str = "Custom Level 0 acceptor",
-    level0_acceptor_n_overhang: str = "CTCA",
-    level0_acceptor_c_overhang: str = "CGAG",
-    cds1_c_overhang: str = "CTTC",
-    cds2_n_overhang: str = "GAAG",
-    cds1_cds2_arelf_offset_nt: int = 11,
-    cds1_cds14_c_overhang: str = "GTGA",
-    cds14_n_overhang: str = "TCAC",
-    cds1_cds14_arelf_offset_nt: int = 4,
-    cds14_cds19_c_overhang: str = "CACG",
-    cds19_n_overhang: str = "CGTG",
-    cds14_cds19_arelf_offset_nt: int = 1,
-    level1_acceptor_name: str = "Custom Level 1 acceptor",
-    level1_n_overhang: str = "GCCC",
-    level1_c_overhang: str = "GCGA",
+    assembly_interface_preset: str = "auto",
+    level_minus1_5prime_overhang: str = "ACAT",
+    level_minus1_3prime_overhang: str = "ACAA",
+    level0_5prime_overhang: str = "CTCA",
+    level0_3prime_overhang: str = "CTCG",
+    level1_5prime_overhang: str = "GGAG",
+    level1_3prime_overhang: str = "AGCG",
+    level_minus1_vector: Optional[str] = None,
+    level0_vector: Optional[str] = None,
+    level1_vector: Optional[str] = None,
     optimize_depth: int = 2000,
     n_fragments: Optional[int] = None,
     kazusa_species_id: str = "",
     upload_bytes: Optional[Union[bytes, bytearray, memoryview, str]] = None,
     upload_filename: Optional[str] = None,
     prompt_upload_if_needed: bool = True,
-    n_terminal_5prime_side_overhang: Optional[str] = None,
-    entry_5prime_n_terminal_side_overhang: Optional[str] = None,
-    entry_3prime_c_terminal_side_overhang: Optional[str] = None,
-    level0_acceptor_5prime_n_terminal_side_overhang: Optional[str] = None,
-    level0_acceptor_3prime_c_terminal_side_overhang: Optional[str] = None,
-    cds1_to_cds2_upstream_3prime_c_terminal_side_overhang: Optional[str] = None,
-    cds1_to_cds2_downstream_5prime_n_terminal_side_overhang: Optional[str] = None,
-    cds1_to_cds14_upstream_3prime_c_terminal_side_overhang: Optional[str] = None,
-    cds1_to_cds14_downstream_5prime_n_terminal_side_overhang: Optional[str] = None,
-    cds14_to_cds19_upstream_3prime_c_terminal_side_overhang: Optional[str] = None,
-    cds14_to_cds19_downstream_5prime_n_terminal_side_overhang: Optional[str] = None,
-    level1_5prime_n_terminal_side_overhang: Optional[str] = None,
-    level1_3prime_c_terminal_side_overhang: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Apply Colab Form values; return dict with updated config + codon_data.
 
@@ -80,42 +58,11 @@ def apply_form_settings(
     upload / Kazusa-fetch modes. Translation QC always checks the loaded
     organism codon table.
     """
-    # Prefer the explicit terminal-side API. The shorter historical keywords
-    # remain accepted so existing notebooks/configuration code keeps working.
-    def _new_or_legacy(explicit: Optional[str], legacy: str) -> str:
-        return legacy if explicit is None else explicit
-
-    nterm_overhang = _new_or_legacy(
-        n_terminal_5prime_side_overhang, nterm_overhang
-    )
-    entry_n_overhang = _new_or_legacy(
-        entry_5prime_n_terminal_side_overhang, entry_n_overhang
-    )
-    entry_c_overhang = _new_or_legacy(
-        entry_3prime_c_terminal_side_overhang, entry_c_overhang
-    )
-    level0_acceptor_n_overhang = (
-        _new_or_legacy(
-            level0_acceptor_5prime_n_terminal_side_overhang,
-            level0_acceptor_n_overhang,
-        )
-    )
-    level0_acceptor_c_overhang = (
-        _new_or_legacy(
-            level0_acceptor_3prime_c_terminal_side_overhang,
-            level0_acceptor_c_overhang,
-        )
-    )
-    level1_n_overhang = _new_or_legacy(
-        level1_5prime_n_terminal_side_overhang, level1_n_overhang
-    )
-    level1_c_overhang = _new_or_legacy(
-        level1_3prime_c_terminal_side_overhang, level1_c_overhang
-    )
-
     cfg = dict(config)
     cfg["target_rna"] = str(target_rna).strip().upper().replace("T", "U")
-    cfg["nterm_overhang"] = nterm_overhang
+    cfg["ppr_5prime_fusion_site"] = deposited_grasp_interface_preset()["level0"][
+        "ppr_outer"
+    ][FIVE_PRIME_CODING_SITE]
     cfg["architecture"] = architecture
 
     from .dna import reverse_complement
@@ -126,205 +73,124 @@ def apply_form_settings(
             raise ValueError(f"{label} must be exactly four DNA bases (ACGT)")
         return cleaned
 
-    def _pair(
-        legacy_upstream: str,
-        legacy_downstream: str,
-        explicit_upstream: Optional[str],
-        explicit_downstream: Optional[str],
-        label: str,
-    ):
-        up = _overhang(
-            legacy_upstream if explicit_upstream is None else explicit_upstream,
-            f"{label} upstream 3′ / C-terminal-side fusion site",
-        )
-        down_source = (
-            legacy_downstream if explicit_downstream is None else explicit_downstream
-        )
-        down = _overhang(
-            down_source,
-            f"{label} downstream 5′ / N-terminal-side fusion site",
-        )
-        if reverse_complement(up) != down:
+    level_minus1_5prime = _overhang(
+        level_minus1_5prime_overhang, "Level −1 5′ overhang"
+    )
+    level_minus1_3prime = _overhang(
+        level_minus1_3prime_overhang, "Level −1 3′ overhang"
+    )
+    level0_5prime = _overhang(level0_5prime_overhang, "Level 0 5′ overhang")
+    level0_3prime = _overhang(level0_3prime_overhang, "Level 0 3′ overhang")
+    level1_5prime = _overhang(level1_5prime_overhang, "Level 1 5′ overhang")
+    level1_3prime = _overhang(level1_3prime_overhang, "Level 1 3′ overhang")
+    toolbox = deposited_grasp_interface_preset()
+    entry_defaults = toolbox["level_minus1_entry"]
+    level0_defaults = toolbox["level0"]["acceptor_outer"]
+    level1_defaults = toolbox["final_cassette"]
+    ppr_5prime = toolbox["level0"]["ppr_outer"][FIVE_PRIME_CODING_SITE]
+    standard_values = (
+        level_minus1_5prime == entry_defaults[FIVE_PRIME_END]
+        and level_minus1_3prime == entry_defaults[THREE_PRIME_END]
+        and level0_5prime == level0_defaults[FIVE_PRIME_END]
+        and level0_3prime == level0_defaults[THREE_PRIME_END]
+        and level1_5prime == level1_defaults[FIVE_PRIME_END]
+        and level1_3prime == level1_defaults[THREE_PRIME_END]
+    )
+    preset_request = str(assembly_interface_preset).strip().lower()
+    if preset_request == "auto":
+        selected_profile = "deposited_grasp" if standard_values else "custom"
+    elif preset_request == "deposited_grasp":
+        if not standard_values:
             raise ValueError(
-                f"{label}: the upstream 3′ / C-terminal-side and downstream "
-                f"5′ / N-terminal-side overhangs must be reverse complements "
-                f"({up} pairs with {reverse_complement(up)}, not {down})"
+                "The deposited GRASP preset requires the deposited 5′/3′ overhangs"
             )
-        return up, down
+        selected_profile = "deposited_grasp"
+    elif preset_request == "custom":
+        selected_profile = "custom"
+    else:
+        raise ValueError(
+            "assembly_interface_preset must be 'auto', 'custom', or 'deposited_grasp'"
+        )
 
-    def _offset(value: int, label: str) -> int:
-        result = int(value)
-        if not 0 <= result <= 11:
-            raise ValueError(f"{label} must be between 0 and 11 within ARELF")
-        return result
-
-    cds1_c, cds2_n = _pair(
-        cds1_c_overhang,
-        cds2_n_overhang,
-        cds1_to_cds2_upstream_3prime_c_terminal_side_overhang,
-        cds1_to_cds2_downstream_5prime_n_terminal_side_overhang,
-        "CDS1→CDS2",
+    level_minus1_vector = level_minus1_vector or (
+        entry_defaults["vector_id"]
+        if (level_minus1_5prime, level_minus1_3prime)
+        == (
+            entry_defaults[FIVE_PRIME_END],
+            entry_defaults[THREE_PRIME_END],
+        )
+        else "custom_level_minus1_entry"
     )
-    cds1_14_c, cds14_n = _pair(
-        cds1_cds14_c_overhang,
-        cds14_n_overhang,
-        cds1_to_cds14_upstream_3prime_c_terminal_side_overhang,
-        cds1_to_cds14_downstream_5prime_n_terminal_side_overhang,
-        "CDS1→CDS14",
+    level0_vector = level0_vector or (
+        toolbox["level0"]["acceptor_id"]
+        if (level0_5prime, level0_3prime)
+        == (
+            level0_defaults[FIVE_PRIME_END],
+            level0_defaults[THREE_PRIME_END],
+        )
+        else "custom_level0_acceptor"
     )
-    cds14_19_c, cds19_n = _pair(
-        cds14_cds19_c_overhang,
-        cds19_n_overhang,
-        cds14_to_cds19_upstream_3prime_c_terminal_side_overhang,
-        cds14_to_cds19_downstream_5prime_n_terminal_side_overhang,
-        "CDS14→CDS19",
+    level1_vector = level1_vector or (
+        level1_defaults["vector_id"]
+        if (level1_5prime, level1_3prime)
+        == (
+            level1_defaults[FIVE_PRIME_END],
+            level1_defaults[THREE_PRIME_END],
+        )
+        else "custom_level1_acceptor"
     )
+    offsets = {
+        "terminal_to_cds2": 11,
+        "cds1_to_cds14": 4,
+        "cds14_to_cds19": 1,
+    }
+    junctions = {
+        name: {
+            "upstream_three_prime_end_overhang": values[
+                "upstream_three_prime_end_overhang"
+            ],
+            "downstream_five_prime_end_overhang": values[
+                "downstream_five_prime_end_overhang"
+            ],
+            "assembled_coding_site": values["assembled_coding_site"],
+            "arelf_offset_nt": offsets[name],
+        }
+        for name, values in toolbox["junctions"].items()
+    }
     cfg["assembly_interfaces"] = {
-        "terminal_side_convention": (
-            "N-terminal side = 5prime; C-terminal side = 3prime"
-        ),
+        "preset": selected_profile,
+        "terminal_side_convention": "construct_ends_5prime_and_3prime",
         "overhang_sequence_notation": "5prime_to_3prime",
         "notation": CANONICAL_NOTATION,
-        "coding_strand_direction": "5prime_N_to_3prime_C",
-        # Retained for assembly-interface schema migration compatibility.
-        "overhang_notation": "directional_terminal_5p",
+        "coding_strand_direction": "5prime_to_3prime",
         "level_minus1_entry": {
-            "profile": "custom",
-            "vector_name": str(entry_vector_name).strip(),
+            "profile": selected_profile,
+            "vector_name": str(level_minus1_vector).strip(),
             "enzyme": "BsaI",
-            "n_terminal_overhang": _overhang(
-                entry_n_overhang, "Entry 5′ / N-terminal-side overhang"
-            ),
-            "c_terminal_overhang": _overhang(
-                entry_c_overhang, "Entry 3′ / C-terminal-side overhang"
-            ),
-            FIVE_PRIME_END: _overhang(
-                entry_n_overhang, "Entry 5′ / N-terminal-side overhang"
-            ),
-            THREE_PRIME_END: _overhang(
-                entry_c_overhang, "Entry 3′ / C-terminal-side overhang"
-            ),
-            FIVE_PRIME_CODING_SITE: _overhang(
-                entry_n_overhang, "Entry 5′ / N-terminal-side overhang"
-            ),
-            THREE_PRIME_CODING_SITE: reverse_complement(
-                _overhang(
-                    entry_c_overhang, "Entry 3′ / C-terminal-side overhang"
-                )
-            ),
+            FIVE_PRIME_END: level_minus1_5prime,
+            THREE_PRIME_END: level_minus1_3prime,
+            FIVE_PRIME_CODING_SITE: level_minus1_5prime,
+            THREE_PRIME_CODING_SITE: reverse_complement(level_minus1_3prime),
         },
         "level0": {
-            "acceptor_name": str(level0_acceptor_name).strip(),
+            "acceptor_name": str(level0_vector).strip(),
             "release_enzyme": "BpiI / BbsI",
-            "acceptor_n_terminal_overhang": _overhang(
-                level0_acceptor_n_overhang,
-                "Level 0 acceptor 5′ / N-terminal-side overhang",
-            ),
-            "acceptor_c_terminal_overhang": _overhang(
-                level0_acceptor_c_overhang,
-                "Level 0 acceptor 3′ / C-terminal-side overhang",
-            ),
             "acceptor_outer": {
-                FIVE_PRIME_END: _overhang(
-                    level0_acceptor_n_overhang,
-                    "Level 0 acceptor 5′ / N-terminal-side overhang",
-                ),
-                THREE_PRIME_END: _overhang(
-                    level0_acceptor_c_overhang,
-                    "Level 0 acceptor 3′ / C-terminal-side overhang",
-                ),
-                FIVE_PRIME_CODING_SITE: _overhang(
-                    level0_acceptor_n_overhang,
-                    "Level 0 acceptor 5′ / N-terminal-side overhang",
-                ),
-                THREE_PRIME_CODING_SITE: _overhang(
-                    level0_acceptor_c_overhang,
-                    "Level 0 acceptor 3′ / C-terminal-side overhang",
-                ),
-            },
-            "block_junctions": {
-                "cds1_to_cds14": {
-                    "upstream_c": cds1_14_c,
-                    "downstream_n": cds14_n,
-                    "arelf_offset_nt": _offset(
-                        cds1_cds14_arelf_offset_nt, "CDS1→CDS14 ARELF offset"
-                    ),
-                },
-                "cds14_to_cds19": {
-                    "upstream_c": cds14_19_c,
-                    "downstream_n": cds19_n,
-                    "arelf_offset_nt": _offset(
-                        cds14_cds19_arelf_offset_nt, "CDS14→CDS19 ARELF offset"
-                    ),
-                },
-                "cds1_to_cds2": {
-                    "upstream_c": cds1_c,
-                    "downstream_n": cds2_n,
-                    "arelf_offset_nt": _offset(
-                        cds1_cds2_arelf_offset_nt, "CDS1→CDS2 ARELF offset"
-                    ),
-                },
+                FIVE_PRIME_END: level0_5prime,
+                THREE_PRIME_END: level0_3prime,
+                FIVE_PRIME_CODING_SITE: level0_5prime,
+                THREE_PRIME_CODING_SITE: reverse_complement(level0_3prime),
             },
         },
-        "junctions": {
-            "cds1_to_cds14": {
-                "upstream_three_prime_end_overhang": cds1_14_c,
-                "downstream_five_prime_end_overhang": cds14_n,
-                "assembled_coding_site": cds1_14_c,
-                "assembled_plus_site": cds1_14_c,
-                "arelf_offset_nt": _offset(
-                    cds1_cds14_arelf_offset_nt, "CDS1→CDS14 ARELF offset"
-                ),
-            },
-            "cds14_to_cds19": {
-                "upstream_three_prime_end_overhang": cds14_19_c,
-                "downstream_five_prime_end_overhang": cds19_n,
-                "assembled_coding_site": cds14_19_c,
-                "assembled_plus_site": cds14_19_c,
-                "arelf_offset_nt": _offset(
-                    cds14_cds19_arelf_offset_nt, "CDS14→CDS19 ARELF offset"
-                ),
-            },
-            "terminal_to_cds2": {
-                "upstream_three_prime_end_overhang": cds1_c,
-                "downstream_five_prime_end_overhang": cds2_n,
-                "assembled_coding_site": cds1_c,
-                "assembled_plus_site": cds1_c,
-                "arelf_offset_nt": _offset(
-                    cds1_cds2_arelf_offset_nt, "CDS1→CDS2 ARELF offset"
-                ),
-            },
-        },
+        "junctions": junctions,
         "level1": {
-            "acceptor_name": str(level1_acceptor_name).strip(),
-            "n_terminal_overhang": _overhang(
-                level1_n_overhang,
-                "Level 1 cassette 5′ / N-terminal-side overhang",
-            ),
-            "c_terminal_overhang": _overhang(
-                level1_c_overhang,
-                "Level 1 cassette 3′ / C-terminal-side overhang",
-            ),
-            FIVE_PRIME_END: _overhang(
-                level1_n_overhang,
-                "Level 1 cassette 5′ / N-terminal-side overhang",
-            ),
-            THREE_PRIME_END: _overhang(
-                level1_c_overhang,
-                "Level 1 cassette 3′ / C-terminal-side overhang",
-            ),
+            "acceptor_name": str(level1_vector).strip(),
+            FIVE_PRIME_END: level1_5prime,
+            THREE_PRIME_END: level1_3prime,
+            FIVE_PRIME_CODING_SITE: level1_5prime,
+            THREE_PRIME_CODING_SITE: reverse_complement(level1_3prime),
         },
     }
-    if str(assembly_interface_preset) == "deposited_grasp":
-        if nterm_overhang != "AGGT":
-            raise ValueError(
-                "The deposited GRASP preset requires the AGGT PPR N interface"
-            )
-        cfg["assembly_interfaces"] = {"preset": "deposited_grasp"}
-    elif str(assembly_interface_preset) != "custom":
-        raise ValueError(
-            "assembly_interface_preset must be 'custom' or 'deposited_grasp'"
-        )
     cfg["overhang_redesign"] = {
         "enabled": bool(overhang_redesign),
         "selection": redesign_selection,

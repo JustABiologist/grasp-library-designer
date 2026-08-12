@@ -33,7 +33,7 @@ B/C/D are shared across every five-part Level 0 block. The runtime redesign is
 limited to cuts fully contained within invariant `ARELF`, but it is not limited
 to the paper's native cut indices: all motif-relative starts 0–11 are explored.
 Candidate identity includes both the four-base overhang and its ARELF offset.
-Prefer `1A_*_AGGT` for the deposited N-terminal fusion; `AATG` variants remain
+Prefer `1A_*_AGGT` for the deposited 5′ fusion; `AATG` variants remain
 available as alternate start-compatible parts.
 
 Deposited subsequent MoClo block chains are:
@@ -48,11 +48,9 @@ Order each part as a double-stranded synthesis fragment with inward-facing BsaI 
 
 `TTTGGTCTCAACAT{pAGM1311 insert}TTGTTGAGACCAAA`
 
-This is the deposited-GRASP preset. The dashboard also accepts named custom
-Level −1, Level 0, and Level 1 interfaces. Dashboard labels name physical ends:
-N-terminal side = 5′ end and C-terminal side = 3′ end. Every sticky-end label
-is written 5′→3′, so compatible upstream 3′/C-side and downstream 5′/N-side
-overhangs are reverse complements. Assembled coding-strand sites are stored
-separately where needed. Without a custom acceptor sequence, the software can
-check insert geometry and interface requirements but cannot claim that the
-custom vector backbone was sequence-simulated.
+The dashboard asks only for physical 5′ and 3′ overhangs at Level −1, Level 0,
+and Level 1. Every value is written 5′→3′. Deposited defaults are `ACAT/ACAA`,
+`CTCA/CTCG`, and `GGAG/AGCG`; retained coding-strand sites are tracked
+separately. Without a custom acceptor sequence, the software can check insert
+geometry and interface requirements but cannot claim that the custom vector
+backbone was sequence-simulated.

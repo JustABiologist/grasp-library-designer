@@ -1,37 +1,9 @@
 project_name: GRASP_9S_organism_optimized
 genetic_code: 1
 architecture: 9S
-nterm_overhang: AGGT
+ppr_5prime_fusion_site: AGGT
 assembly_interfaces:
-  overhang_notation: directional_terminal_5p
-  level_minus1_entry:
-    profile: custom
-    vector_name: Custom Level -1 entry vector
-    enzyme: BsaI
-    n_terminal_overhang: AACA
-    c_terminal_overhang: GGAG
-  level0:
-    acceptor_name: Custom Level 0 acceptor
-    release_enzyme: BpiI / BbsI
-    acceptor_n_terminal_overhang: CTCA
-    acceptor_c_terminal_overhang: CGAG
-    block_junctions:
-      cds1_to_cds14:
-        upstream_c: GTGA
-        downstream_n: TCAC
-        arelf_offset_nt: 4
-      cds14_to_cds19:
-        upstream_c: CACG
-        downstream_n: CGTG
-        arelf_offset_nt: 1
-      cds1_to_cds2:
-        upstream_c: CTTC
-        downstream_n: GAAG
-        arelf_offset_nt: 11
-  level1:
-    acceptor_name: Custom Level 1 acceptor
-    n_terminal_overhang: GCCC
-    c_terminal_overhang: GCGA
+  preset: deposited_grasp
 assembly_enzyme: "GRASP default \xB7 BsaI + BpiI + BsmBI"
 synthesis_vendor: "Twist \xB7 Express / Low complexity"
 codon_usage_file: grasp_library_project/input/codon_usage.csv

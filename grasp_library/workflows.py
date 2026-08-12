@@ -308,8 +308,8 @@ def run_library_optimize(
             "oh3",
             "oh5_coding_site_5to3",
             "oh3_coding_site_5to3",
-            "n_terminal_overhang_5p",
-            "c_terminal_overhang_5p",
+            "five_prime_end_overhang",
+            "three_prime_end_overhang",
             "overhang_notation",
             "oh5_mask_start",
             "oh3_mask_start",
@@ -611,10 +611,10 @@ def ensure_grasp_imported(
         and "REPLACE" not in cached_text[:500]
         and "oh5_mask_start" in cached_header
         and "oh3_mask_start" in cached_header
-        and "n_terminal_overhang_5p" in cached_header
-        and "c_terminal_overhang_5p" in cached_header
-        and "n_terminal_overhang_5p" in full_header
-        and "c_terminal_overhang_5p" in full_header
+        and "five_prime_end_overhang" in cached_header
+        and "three_prime_end_overhang" in cached_header
+        and "five_prime_end_overhang" in full_header
+        and "three_prime_end_overhang" in full_header
         and (input_dir / "junction_map.csv").exists()
         and (input_dir / "overhang_candidates.csv").exists()
     )
@@ -689,7 +689,7 @@ def compile_and_assemble_target(
     input_dir: Path,
     output_dir: Path,
     architecture: str = "9S",
-    nterm_overhang: str = "AGGT",
+    five_prime_fusion_site: str = "AGGT",
     codon_data: Optional[Dict] = None,
 ) -> Dict[str, Any]:
     """GAP-compile target RNA against the annealed library and stitch CDS."""
@@ -700,7 +700,7 @@ def compile_and_assemble_target(
     plan = compile_target_gap(
         target_rna,
         architecture=architecture,
-        nterm_overhang=nterm_overhang,
+        five_prime_fusion_site=five_prime_fusion_site,
     )
     parts_full = None
     if {"part_id", "oh5_mask_start", "oh3_mask_start"} <= set(

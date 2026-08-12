@@ -533,8 +533,8 @@ def optimize_library(
             for metadata_column in (
                 "oh5_coding_site_5to3",
                 "oh3_coding_site_5to3",
-                "n_terminal_overhang_5p",
-                "c_terminal_overhang_5p",
+                "five_prime_end_overhang",
+                "three_prime_end_overhang",
                 "overhang_notation",
             ):
                 if metadata_column in row.index:
@@ -562,7 +562,7 @@ def simulate_assembled_cds(
     """Stitch optimized module CDS with shared 4-nt overhangs deduplicated.
 
     Uses overhang-bounded inserts from ``parts_full`` coordinates:
-    keep ``cds[oh5 : oh3+4]`` (plus any N-terminal lead bases before ``oh5``
+    keep ``cds[oh5 : oh3+4]`` (plus any 5′-side lead bases before ``oh5``
     on the first module). Downstream modules drop the shared 5′ overhang.
     This trims GenBank window trail past the 3′ overhang (e.g. C modules)
     so native 9S ORFs stay in-frame and match the GAP binder protein.
@@ -608,7 +608,7 @@ def simulate_assembled_cds(
     )
     used_overhang_bounds = False
     previous_right_site = None
-    previous_c_terminal = None
+    previous_three_prime_end = None
     previous_group = None
     coding_junctions_checked = 0
     directional_terminal_pairs_checked = 0
@@ -654,17 +654,17 @@ def simulate_assembled_cds(
                     )
 
             current_group = getattr(row, "assembly_group", None)
-            current_n_terminal = meta.get("n_terminal_overhang_5p")
+            current_five_prime_end = meta.get("five_prime_end_overhang")
             crossing_blocks = (
                 previous_group is not None
                 and current_group is not None
                 and str(previous_group) != str(current_group)
             )
-            if crossing_blocks and previous_c_terminal is not None and pd.notna(
-                current_n_terminal
+            if crossing_blocks and previous_three_prime_end is not None and pd.notna(
+                current_five_prime_end
             ):
-                upstream = clean_dna(previous_c_terminal)
-                downstream = clean_dna(current_n_terminal)
+                upstream = clean_dna(previous_three_prime_end)
+                downstream = clean_dna(current_five_prime_end)
                 directional_terminal_pairs_checked += 1
                 if reverse_complement(upstream) != downstream:
                     raise ValueError(
@@ -676,7 +676,7 @@ def simulate_assembled_cds(
             else:
                 chunks.append(insert[4:])
             previous_right_site = right_site
-            previous_c_terminal = meta.get("c_terminal_overhang_5p")
+            previous_three_prime_end = meta.get("three_prime_end_overhang")
             previous_group = current_group
             used_overhang_bounds = True
         else:

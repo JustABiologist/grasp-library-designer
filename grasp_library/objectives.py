@@ -398,14 +398,18 @@ def evaluate_design(
     )
 
     if isinstance(overhangs, Mapping) and overhangs:
-        from .assembly_interfaces import resolve_assembly_interfaces
+        from .assembly_interfaces import (
+            FIVE_PRIME_CODING_SITE,
+            THREE_PRIME_CODING_SITE,
+            resolve_assembly_interfaces,
+        )
 
         assembly_profile = resolve_assembly_interfaces(config)
         configured_outer = assembly_profile["level0"].get("acceptor_outer")
         external_overhangs = (
             (
-                configured_outer["n_overhang_5p"],
-                configured_outer["c_overhang_5p"],
+                configured_outer[FIVE_PRIME_CODING_SITE],
+                configured_outer[THREE_PRIME_CODING_SITE],
             )
             if configured_outer is not None
             else None

@@ -84,33 +84,29 @@ not cloning guarantees. Synthesis QC distinguishes `PASS`, `WARNING`, and
 `vendor_acceptance_confirmed=False`.
 
 The order file contains double-stranded synthesis fragments with paired,
-inward-facing BsaI sites. Every interface is explicit in `CONFIG` and editable
-in the dashboard. Terminal-side labels name the physical end of the coding-
-oriented construct: **N-terminal side = 5′ end** and **C-terminal side = 3′
-end**. Every overhang label is written 5′→3′, so compatible ends are reverse
-complements. Bases retained on the assembled coding strand are tracked
-separately where they differ from the physical sticky-end label. Defaults are:
+inward-facing BsaI sites. The dashboard exposes exactly one physical 5′/3′
+overhang pair for each cloning level. Every overhang is written 5′→3′. The
+deposited GRASP toolbox defaults are:
 
-- Level −1 entry vector: 5′/N side `AACA`, 3′/C side `GGAG`.
-- Level 0 acceptor release boundaries: 5′/N side `CTCA`, 3′/C side `CGAG`.
-- CDS1 3′/C side / CDS2 5′/N side: `CTTC` / `GAAG`.
-- Resulting Level 1 cassette: 5′/N side `GCCC`, 3′/C side `GCGA`.
+- Level −1: `ACAT / ACAA`.
+- Level 0: `CTCA / CTCG`.
+- Level 1: `GGAG / AGCG`.
 
-The first and last pairs are custom defaults. They must not be described as
-native pAGM1311 or pICH47802 interfaces. A deposited-GRASP preset is retained
-for pAGM1311/pAGM9121 compatibility. When no acceptor-vector sequence is
-provided, the exporter validates the insert geometry and interface requirements
-but honestly reports that it did not simulate the vector backbone.
+The 3′ sticky ends are reverse-complemented internally when constructing the
+coding-oriented sequence. Thus the retained 3′ coding sites are `TTGT`,
+`CGAG`, and `CGCT`, respectively. Internal five-part and ARELF junctions are
+derived from the GRASP architecture rather than presented as extra dashboard
+overhang fields. When no custom acceptor sequence is provided, the exporter
+validates interface requirements but does not claim backbone simulation.
 
 The exported GRASP tract is a PPR block set, not a standalone expression
 plasmid. The PPR block-chain check does not validate an entire Level 1
-expression construct; promoter, N-terminal domain, effector, terminator, and
+expression construct; promoter, upstream domain, effector, terminator, and
 acceptor context must be supplied separately.
 
-For 14S and 19S, the intermediate directional pairs are also configurable:
-`GTGA/TCAC` for the CDS1 3′/C-side → CDS14 5′/N-side junction and
-`CACG/CGTG` for the CDS14 3′/C-side → CDS19 5′/N-side junction. Default ARELF
-offsets are 4 and 1; the CDS1→CDS2 default offset is 11.
+For 14S and 19S, intermediate junctions are generated inside the invariant
+`ARELF` motif. They are architecture-derived and can be explored by the
+overhang redesign search without adding more dashboard fields.
 
 ---
 

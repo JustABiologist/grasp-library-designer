@@ -78,8 +78,8 @@ def validate_order_fragment_in_silico(
         "entry_three_prime_assembled_coding_site": entry_insert[-4:],
         "cloned_entry_context_5to3": cloned_context,
         "module_release_payload_5to3": payload,
-        "module_release_oh5": payload[:4],
-        "module_release_oh3": payload[-4:],
+        "module_release_five_prime_assembled_coding_site": payload[:4],
+        "module_release_three_prime_assembled_coding_site": payload[-4:],
         "order_fragment_requirements_checked": True,
         "entry_interface_requirements_checked": True,
         "entry_vector_context_in_silico_validated": context_validated,
@@ -107,8 +107,12 @@ def validate_pagm1311_order_fragment(sequence: str) -> Dict[str, Any]:
     ]
     result["cloned_pagm1311_context_5to3"] = result["cloned_entry_context_5to3"]
     result["bpii_release_payload_5to3"] = result["module_release_payload_5to3"]
-    result["bpii_release_oh5"] = result["module_release_oh5"]
-    result["bpii_release_oh3"] = result["module_release_oh3"]
+    result["bpii_release_oh5"] = result[
+        "module_release_five_prime_assembled_coding_site"
+    ]
+    result["bpii_release_oh3"] = result[
+        "module_release_three_prime_assembled_coding_site"
+    ]
     return result
 
 
@@ -149,8 +153,18 @@ def _validate_level0_groups(
                 "assembly_group": group,
                 "level_minus1_parts": ";".join(part_ids),
                 "n_parts": len(part_ids),
-                "level0_outer_left_5to3": assembled[:4] if outer else "",
-                "level0_outer_right_5to3": assembled[-4:] if outer else "",
+                "level0_five_prime_end_overhang": (
+                    outer[FIVE_PRIME_END] if outer else ""
+                ),
+                "level0_three_prime_end_overhang": (
+                    outer[THREE_PRIME_END] if outer else ""
+                ),
+                "level0_five_prime_assembled_coding_site": (
+                    assembled[:4] if outer else ""
+                ),
+                "level0_three_prime_assembled_coding_site": (
+                    assembled[-4:] if outer else ""
+                ),
                 "ppr_block_5to3": block_insert,
                 "ppr_block_length": len(block_insert),
                 "level0_interface_requirements_checked": True,
@@ -198,9 +212,9 @@ def _validate_ppr_block_chain(
     blocks = [str(by_group.loc[group, "ppr_block_5to3"]) for group in group_order]
     ppr_outer = interfaces_profile["level0"]["ppr_outer"]
     if blocks[0][:4] != ppr_outer[FIVE_PRIME_CODING_SITE]:
-        raise AssertionError("first PPR block misses the configured PPR N interface")
+        raise AssertionError("first PPR block misses the configured 5′ coding site")
     if blocks[-1][-4:] != ppr_outer[THREE_PRIME_CODING_SITE]:
-        raise AssertionError("last PPR block misses the configured PPR C interface")
+        raise AssertionError("last PPR block misses the configured 3′ coding site")
     for left, right, join_name in zip(blocks, blocks[1:], layout["joins"]):
         junction = interfaces_profile["junctions"][join_name]
         upstream = junction["upstream_three_prime_end_overhang"]
@@ -292,7 +306,7 @@ def run_oneshot_design(
     plan = compile_target_gap(
         rna,
         architecture=architecture,
-        nterm_overhang=str(config.get("nterm_overhang", "AGGT")),
+        five_prime_fusion_site=str(config.get("ppr_5prime_fusion_site", "AGGT")),
     )
 
     records = load_grasp_records([bundled_profile_genbank() / "GRASP_-1.gb"])
@@ -390,8 +404,8 @@ def run_oneshot_design(
             [
                 "optimized_part_id",
                 "order_fragment_id",
-                "module_release_oh5",
-                "module_release_oh3",
+                "module_release_five_prime_assembled_coding_site",
+                "module_release_three_prime_assembled_coding_site",
             ]
         ],
         on="optimized_part_id",

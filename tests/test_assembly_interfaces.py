@@ -16,23 +16,34 @@ from grasp_library.assembly_interfaces import (
 )
 
 
-def test_custom_default_uses_requested_directional_interfaces():
+def test_default_uses_deposited_grasp_interfaces():
     profile = resolve_assembly_interfaces()
 
     assert profile["notation"] == CANONICAL_NOTATION
-    assert profile["coding_strand_direction"] == "5prime_N_to_3prime_C"
-    assert profile["level_minus1_entry"][FIVE_PRIME_END] == "AACA"
-    assert profile["level_minus1_entry"][THREE_PRIME_END] == "GGAG"
-    assert profile["level_minus1_entry"][THREE_PRIME_CODING_SITE] == "CTCC"
+    assert profile["coding_strand_direction"] == "5prime_to_3prime"
+    assert profile["level_minus1_entry"][FIVE_PRIME_END] == "ACAT"
+    assert profile["level_minus1_entry"][THREE_PRIME_END] == "ACAA"
+    assert profile["level_minus1_entry"][THREE_PRIME_CODING_SITE] == "TTGT"
     assert profile["level0"]["ppr_outer"][FIVE_PRIME_END] == "AGGT"
-    assert profile["level0"]["ppr_outer"][THREE_PRIME_END] == "TTCG"
-    assert profile["final_cassette"][FIVE_PRIME_END] == "GCCC"
-    assert profile["final_cassette"][THREE_PRIME_END] == "GCGA"
+    assert profile["level0"]["ppr_outer"][THREE_PRIME_END] == "CGAA"
+    assert profile["final_cassette"][FIVE_PRIME_END] == "GGAG"
+    assert profile["final_cassette"][THREE_PRIME_END] == "AGCG"
     assert profile["level_minus1_entry"]["vector_sequence"] is None
 
 
 def test_custom_order_fragment_has_two_inward_facing_bsai_sites():
-    profile = resolve_assembly_interfaces()
+    profile = resolve_assembly_interfaces(
+        {
+            "assembly_interfaces": {
+                "preset": "custom",
+                "notation": CANONICAL_NOTATION,
+                "level_minus1_entry": {
+                    FIVE_PRIME_END: "AACA",
+                    THREE_PRIME_END: "GGAG",
+                },
+            }
+        }
+    )
     payload = "AGGTAAAATTCG"
     sequence = build_order_fragment(payload, profile)
 
@@ -54,11 +65,10 @@ def test_deposited_grasp_preset_reproduces_entry_and_outer_interfaces():
     )
     assert profile["level_minus1_entry"][THREE_PRIME_END] == "ACAA"
     assert profile["level_minus1_entry"][THREE_PRIME_CODING_SITE] == "TTGT"
-    assert profile["level_minus1_entry"]["c_overhang_5p"] == "ACAA"
     assert profile["level0"]["acceptor_outer"][FIVE_PRIME_END] == "CTCA"
-    assert profile["level0"]["acceptor_outer"][THREE_PRIME_END] == "CGAG"
+    assert profile["level0"]["acceptor_outer"][THREE_PRIME_END] == "CTCG"
     assert profile["final_cassette"][FIVE_PRIME_END] == "GGAG"
-    assert profile["final_cassette"][THREE_PRIME_END] == "CGCT"
+    assert profile["final_cassette"][THREE_PRIME_END] == "AGCG"
 
 
 def test_deposited_entry_sites_reconstruct_annotated_clone_plus_strand():
@@ -98,28 +108,31 @@ def test_deposited_entry_sites_reconstruct_annotated_clone_plus_strand():
 def test_dashboard_schema_is_normalized_and_not_ignored():
     config = {
         "assembly_interfaces": {
-            "overhang_notation": "directional_terminal_5p",
+            "preset": "custom",
+            "notation": CANONICAL_NOTATION,
             "level_minus1_entry": {
-                "profile": "custom",
                 "vector_name": "my entry",
-                "n_terminal_overhang": "AAAA",
-                "c_terminal_overhang": "CCCC",
+                FIVE_PRIME_END: "AAAA",
+                THREE_PRIME_END: "CCCC",
             },
             "level0": {
                 "acceptor_name": "my L0",
-                "acceptor_n_terminal_overhang": "ATGC",
-                "acceptor_c_terminal_overhang": "CGTA",
-                "block_junctions": {
-                    "cds1_to_cds2": {
-                        "upstream_c": "CTTC",
-                        "downstream_n": "GAAG",
-                    }
+                "acceptor_outer": {
+                    FIVE_PRIME_END: "ATGC",
+                    THREE_PRIME_END: "CGTA",
                 },
+            },
+            "junctions": {
+                "terminal_to_cds2": {
+                    "upstream_three_prime_end_overhang": "CTTC",
+                    "downstream_five_prime_end_overhang": "GAAG",
+                    "assembled_coding_site": "GAAG",
+                }
             },
             "level1": {
                 "acceptor_name": "my L1",
-                "n_terminal_overhang": "GCCC",
-                "c_terminal_overhang": "GCGA",
+                FIVE_PRIME_END: "GCCC",
+                THREE_PRIME_END: "GCGA",
             },
         }
     }
@@ -134,37 +147,18 @@ def test_dashboard_schema_is_normalized_and_not_ignored():
     junction = profile["junctions"]["terminal_to_cds2"]
     assert junction["upstream_three_prime_end_overhang"] == "CTTC"
     assert junction["downstream_five_prime_end_overhang"] == "GAAG"
-    assert junction["assembled_coding_site"] == "CTTC"
+    assert junction["assembled_coding_site"] == "GAAG"
 
 
-def test_directional_terminal_pair_is_reverse_complement_validated():
+def test_physical_end_pair_is_reverse_complement_validated():
     profile = resolve_assembly_interfaces()
     bad = copy.deepcopy(profile)
     bad["junctions"]["terminal_to_cds2"][
         "downstream_five_prime_end_overhang"
     ] = "AAAA"
 
-    with pytest.raises(ValueError, match=r"reverse_complement\(CTTC\) != AAAA"):
+    with pytest.raises(ValueError, match=r"reverse_complement\(GAAG\) != AAAA"):
         resolve_assembly_interfaces({"assembly_interfaces": bad})
-
-
-def test_legacy_entry_c_5p_is_mapped_from_opposite_strand_only():
-    profile = resolve_assembly_interfaces(
-        {
-            "assembly_interfaces": {
-                "notation": "directional_terminal_5p",
-                "level_minus1_entry": {
-                    "n_overhang_5p": "ACAT",
-                    "c_overhang_5p": "ACAA",
-                },
-            }
-        }
-    )
-
-    assert profile["level_minus1_entry"][FIVE_PRIME_END] == "ACAT"
-    assert profile["level_minus1_entry"][THREE_PRIME_END] == "ACAA"
-    assert profile["level_minus1_entry"][THREE_PRIME_CODING_SITE] == "TTGT"
-    assert order_fragment_arms(profile)[1].startswith("TTGT")
 
 
 def test_entry_rejects_a_three_prime_site_copied_without_reverse_complementing():
@@ -174,5 +168,5 @@ def test_entry_rejects_a_three_prime_site_copied_without_reverse_complementing()
         "level_minus1_entry"
     ][THREE_PRIME_END]
 
-    with pytest.raises(ValueError, match="3-prime/C-terminal-side overhang"):
+    with pytest.raises(ValueError, match="3-prime overhang"):
         resolve_assembly_interfaces({"assembly_interfaces": bad})

@@ -86,7 +86,7 @@ def score_overhang_set_ggassembler(
         or fidelity_calculator.GRASP_LEVEL0_EXTERNAL_OVERHANGS
     )
     if len(outer) != 2:
-        raise ValueError("Level 0 external overhangs require N and C values")
+        raise ValueError("Level 0 external overhangs require 5′ and 3′ values")
     physical = {
         "J_level0_left": outer[0],
         **overhang_selection,
@@ -142,14 +142,18 @@ def optimize_pareto_overhangs(
         temperature=config.get("ligation", {}).get("temperature", 25),
         hours=config.get("ligation", {}).get("hours", 18),
     )
-    from .assembly_interfaces import resolve_assembly_interfaces
+    from .assembly_interfaces import (
+        FIVE_PRIME_CODING_SITE,
+        THREE_PRIME_CODING_SITE,
+        resolve_assembly_interfaces,
+    )
 
     assembly_profile = resolve_assembly_interfaces(config)
     configured_outer = assembly_profile["level0"].get("acceptor_outer")
     external_overhangs = (
         (
-            configured_outer["n_overhang_5p"],
-            configured_outer["c_overhang_5p"],
+            configured_outer[FIVE_PRIME_CODING_SITE],
+            configured_outer[THREE_PRIME_CODING_SITE],
         )
         if configured_outer is not None
         else calc.GRASP_LEVEL0_EXTERNAL_OVERHANGS

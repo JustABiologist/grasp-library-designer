@@ -17,7 +17,7 @@ from typing import Dict, Mapping, Optional, Sequence, Tuple
 import pandas as pd
 from Bio.Data import CodonTable
 
-from .binder import NTERM_HELIX
+from .binder import FIVE_PRIME_SOLVATING_HELIX
 from .dna import clean_dna, reverse_complement
 
 ARELF_MOTIF = "ARELF"
@@ -34,18 +34,21 @@ NATIVE_INTERNAL_CHOICES = {
 
 DEFAULT_BLOCK_INTERFACES = {
     "cds1_to_cds14": {
-        "upstream_c": "GTGA",
-        "downstream_n": "TCAC",
+        "upstream_three_prime_end_overhang": "TCAC",
+        "downstream_five_prime_end_overhang": "GTGA",
+        "assembled_coding_site": "GTGA",
         "arelf_offset_nt": 4,
     },
     "cds14_to_cds19": {
-        "upstream_c": "CACG",
-        "downstream_n": "CGTG",
+        "upstream_three_prime_end_overhang": "CGTG",
+        "downstream_five_prime_end_overhang": "CACG",
+        "assembled_coding_site": "CACG",
         "arelf_offset_nt": 1,
     },
     "cds1_to_cds2": {
-        "upstream_c": "CTTC",
-        "downstream_n": "GAAG",
+        "upstream_three_prime_end_overhang": "GAAG",
+        "downstream_five_prime_end_overhang": "CTTC",
+        "assembled_coding_site": "CTTC",
         "arelf_offset_nt": 11,
     },
 }
@@ -184,54 +187,27 @@ def build_arelf_candidates(
 
 
 def _block_interfaces(config: Optional[Mapping]) -> Dict[str, dict]:
-    assembly = (config or {}).get("assembly_interfaces", {})
-    if isinstance(assembly, str):
-        from .assembly_interfaces import resolve_assembly_interfaces
+    from .assembly_interfaces import resolve_assembly_interfaces
 
-        resolved = resolve_assembly_interfaces(config)
-        assembly = {"junctions": resolved["junctions"]}
-    configured = assembly.get("level0", {}).get("block_junctions", {})
-    canonical = assembly.get("junctions", {})
+    canonical = resolve_assembly_interfaces(config)["junctions"]
     result: Dict[str, dict] = {}
     for name, defaults in DEFAULT_BLOCK_INTERFACES.items():
         canonical_name = "terminal_to_cds2" if name == "cds1_to_cds2" else name
         canonical_item = dict(canonical.get(canonical_name, {}))
-        normalized = {
-            "upstream_c": canonical_item.get(
-                "upstream_three_prime_end_overhang",
-                canonical_item.get(
-                    "upstream_c_5p",
-                    canonical_item.get(
-                        "assembled_coding_site",
-                        canonical_item.get("assembled_plus_site"),
-                    ),
-                ),
-            ),
-            "downstream_n": canonical_item.get(
-                "downstream_five_prime_end_overhang",
-                canonical_item.get("downstream_n_5p"),
-            ),
-            "assembled_plus_site": canonical_item.get(
-                "assembled_coding_site",
-                canonical_item.get("assembled_plus_site"),
-            ),
-            "arelf_offset_nt": canonical_item.get("arelf_offset_nt"),
-        }
-        normalized = {key: value for key, value in normalized.items() if value is not None}
-        legacy_item = dict(configured.get(name, {}))
-        if "upstream_c" in legacy_item and "assembled_plus_site" not in legacy_item:
-            legacy_item["assembled_plus_site"] = legacy_item["upstream_c"]
         item = {
             **defaults,
-            **normalized,
-            **legacy_item,
+            **canonical_item,
         }
-        upstream = _dna4(item["upstream_c"], label=f"{name} upstream overhang")
+        upstream = _dna4(
+            item["upstream_three_prime_end_overhang"],
+            label=f"{name} upstream 3′ overhang",
+        )
         downstream = _dna4(
-            item["downstream_n"], label=f"{name} downstream overhang"
+            item["downstream_five_prime_end_overhang"],
+            label=f"{name} downstream 5′ overhang",
         )
         assembled = _dna4(
-            item.get("assembled_plus_site", upstream),
+            item["assembled_coding_site"],
             label=f"{name} assembled coding-strand site",
         )
         if downstream != reverse_complement(upstream):
@@ -245,9 +221,9 @@ def _block_interfaces(config: Optional[Mapping]) -> Dict[str, dict]:
         result[name] = {
             "overhang": assembled,
             "offset": offset,
-            "upstream_c": upstream,
-            "downstream_n": downstream,
-            "assembled_plus_site": assembled,
+            "upstream_three_prime_end_overhang": upstream,
+            "downstream_five_prime_end_overhang": downstream,
+            "assembled_coding_site": assembled,
         }
     return result
 
@@ -334,17 +310,21 @@ def materialize_arelf_parts(
         if role == "1A":
             current_aa = str(row["aa_sequence"]).upper().replace(" ", "")
             w_index = current_aa.find("W")
-            nterm = current_aa[:w_index] if w_index >= 0 else NTERM_HELIX
-            full_aa = nterm + _RIGHT_PREFIX.format(fifth=fifth)
-            right_anchor_nt = 3 * (len(nterm) + 16)
-            left = (_dna4(part_id.rsplit("_", 1)[-1]), 2, "J_Nterm", None)
+            five_prime_prefix = (
+                current_aa[:w_index]
+                if w_index >= 0
+                else FIVE_PRIME_SOLVATING_HELIX
+            )
+            full_aa = five_prime_prefix + _RIGHT_PREFIX.format(fifth=fifth)
+            right_anchor_nt = 3 * (len(five_prime_prefix) + 16)
+            left = (_dna4(part_id.rsplit("_", 1)[-1]), 2, "J_5prime", None)
             overhang, offset = chosen["J_ACTC"]
             right = (overhang, right_anchor_nt + offset, "J_ACTC", offset)
         elif role == "2E":
             full_aa = _LEFT_SUFFIX.format(last=last)
             overhang, offset = chosen["J_TGAA"]
             left = (overhang, offset, "J_TGAA", offset)
-            right = ("TTCG", 3 * len(full_aa) - 4, "J_Cterm", None)
+            right = ("TTCG", 3 * len(full_aa) - 4, "J_3prime", None)
         else:
             if role not in _ROLE_BOUNDARIES or last is None or fifth is None:
                 raise ValueError(f"Unsupported GRASP part role in {part_id!r}")
@@ -384,18 +364,16 @@ def materialize_arelf_parts(
                 "oh3": right_oh,
                 "oh5_coding_site_5to3": left_oh,
                 "oh3_coding_site_5to3": right_oh,
-                # Most Level -1 junction labels use the assembled coding-site
-                # convention.  Inter-block terminals additionally carry the
-                # explicit directional 5′ labels from the interface profile.
-                "n_terminal_overhang_5p": (
-                    interfaces[left_name]["downstream_n"]
+                # Coding-site labels and physical end labels remain separate.
+                "five_prime_end_overhang": (
+                    interfaces[left_name]["downstream_five_prime_end_overhang"]
                     if left_name in interfaces
                     else left_oh
                 ),
-                "c_terminal_overhang_5p": (
-                    interfaces[right_name]["upstream_c"]
+                "three_prime_end_overhang": (
+                    interfaces[right_name]["upstream_three_prime_end_overhang"]
                     if right_name in interfaces
-                    else right_oh
+                    else reverse_complement(right_oh)
                 ),
                 "overhang_notation": "assembled_coding_strand_site",
                 "oh5_mask_start": oh5,

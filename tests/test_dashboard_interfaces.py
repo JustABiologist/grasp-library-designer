@@ -1,9 +1,8 @@
+import json
 from pathlib import Path
 
 import pytest
 
-from grasp_library.colab_forms import apply_form_settings
-from grasp_library.control_panel import GraspControlPanel, build_default_config
 from grasp_library.assembly_interfaces import (
     CANONICAL_NOTATION,
     FIVE_PRIME_CODING_SITE,
@@ -12,6 +11,8 @@ from grasp_library.assembly_interfaces import (
     THREE_PRIME_END,
     resolve_assembly_interfaces,
 )
+from grasp_library.colab_forms import apply_form_settings
+from grasp_library.control_panel import GraspControlPanel, build_default_config
 from grasp_library.sample_codon_tables import sample_names
 from grasp_library.synthesis_vendors import (
     enzyme_names,
@@ -32,149 +33,139 @@ def _form_kwargs():
     }
 
 
-def test_dashboard_defaults_expose_all_cloning_layers(tmp_path: Path):
-    cfg = build_default_config(tmp_path)
-    assembly = cfg["assembly_interfaces"]
-
-    assert assembly["notation"] == CANONICAL_NOTATION
-    assert assembly["overhang_sequence_notation"] == "5prime_to_3prime"
-    assert assembly["terminal_side_convention"] == (
-        "N-terminal side = 5prime; C-terminal side = 3prime"
-    )
-    # The old schema tag remains readable during migration.
-    assert assembly["overhang_notation"] == "directional_terminal_5p"
-    assert assembly["level_minus1_entry"]["n_terminal_overhang"] == "AACA"
-    assert assembly["level_minus1_entry"]["c_terminal_overhang"] == "GGAG"
-    assert assembly["level_minus1_entry"][FIVE_PRIME_END] == "AACA"
-    assert assembly["level_minus1_entry"][THREE_PRIME_END] == "GGAG"
-    assert assembly["level_minus1_entry"][FIVE_PRIME_CODING_SITE] == "AACA"
-    assert assembly["level_minus1_entry"][THREE_PRIME_CODING_SITE] == "CTCC"
-    assert assembly["level0"]["block_junctions"]["cds1_to_cds2"] == {
-        "upstream_c": "CTTC",
-        "downstream_n": "GAAG",
-        "arelf_offset_nt": 11,
+def _ends(profile):
+    return {
+        "level_minus1": (
+            profile["level_minus1_entry"][FIVE_PRIME_END],
+            profile["level_minus1_entry"][THREE_PRIME_END],
+        ),
+        "level0": (
+            profile["level0"]["acceptor_outer"][FIVE_PRIME_END],
+            profile["level0"]["acceptor_outer"][THREE_PRIME_END],
+        ),
+        "level1": (
+            profile["final_cassette"][FIVE_PRIME_END],
+            profile["final_cassette"][THREE_PRIME_END],
+        ),
     }
-    assert assembly["level1"]["n_terminal_overhang"] == "GCCC"
-    assert assembly["level1"]["c_terminal_overhang"] == "GCGA"
-    junction = assembly["junctions"]["terminal_to_cds2"]
-    assert junction["upstream_three_prime_end_overhang"] == "CTTC"
-    assert junction["downstream_five_prime_end_overhang"] == "GAAG"
-    assert junction["assembled_coding_site"] == "CTTC"
-    assert cfg["overhang_redesign"]["cut_mode"] == "movable_arelf"
-    assert cfg["overhang_redesign"]["allowed_arelf_offsets_nt"] == list(range(12))
 
 
-def test_legacy_form_pairs_migrate_to_physical_terminal_ends_and_offsets(
-    tmp_path: Path,
-):
+def test_dashboard_defaults_are_the_deposited_grasp_toolbox_overhangs(tmp_path: Path):
+    cfg = build_default_config(tmp_path)
+    profile = resolve_assembly_interfaces(cfg)
+
+    assert profile["profile_name"] == "deposited_grasp"
+    assert profile["notation"] == CANONICAL_NOTATION
+    assert _ends(profile) == {
+        "level_minus1": ("ACAT", "ACAA"),
+        "level0": ("CTCA", "CTCG"),
+        "level1": ("GGAG", "AGCG"),
+    }
+    assert profile["level_minus1_entry"][THREE_PRIME_CODING_SITE] == "TTGT"
+    assert profile["level0"]["acceptor_outer"][THREE_PRIME_CODING_SITE] == "CGAG"
+    assert profile["final_cassette"][THREE_PRIME_CODING_SITE] == "CGCT"
+
+
+def test_form_exposes_only_one_5prime_3prime_pair_per_level(tmp_path: Path):
     cfg = build_default_config(tmp_path)
     applied = apply_form_settings(
         cfg,
         **_form_kwargs(),
-        entry_n_overhang="AAAA",
-        entry_c_overhang="CCCC",
-        cds1_c_overhang="AGTC",
-        cds2_n_overhang="GACT",
-        cds1_cds2_arelf_offset_nt=7,
-        level1_n_overhang="ACGT",
-        level1_c_overhang="TGCA",
-    )["config"]
-
-    assembly = applied["assembly_interfaces"]
-    assert assembly["level_minus1_entry"]["n_terminal_overhang"] == "AAAA"
-    assert assembly["level_minus1_entry"]["c_terminal_overhang"] == "CCCC"
-    assert assembly["level0"]["block_junctions"]["cds1_to_cds2"] == {
-        "upstream_c": "AGTC",
-        "downstream_n": "GACT",
-        "arelf_offset_nt": 7,
-    }
-    assert assembly["junctions"]["terminal_to_cds2"] == {
-        "upstream_three_prime_end_overhang": "AGTC",
-        "downstream_five_prime_end_overhang": "GACT",
-        "assembled_coding_site": "AGTC",
-        "assembled_plus_site": "AGTC",
-        "arelf_offset_nt": 7,
-    }
-    assert assembly["level1"]["n_terminal_overhang"] == "ACGT"
-    assert assembly["level1"]["c_terminal_overhang"] == "TGCA"
-
-
-def test_form_explicit_terminal_side_api_uses_physical_end_values(tmp_path: Path):
-    cfg = build_default_config(tmp_path)
-    applied = apply_form_settings(
-        cfg,
-        **_form_kwargs(),
-        entry_5prime_n_terminal_side_overhang="AAAA",
-        entry_3prime_c_terminal_side_overhang="CCCC",
-        cds1_to_cds2_upstream_3prime_c_terminal_side_overhang="AGTC",
-        cds1_to_cds2_downstream_5prime_n_terminal_side_overhang="GACT",
-        level1_5prime_n_terminal_side_overhang="ACGT",
-        level1_3prime_c_terminal_side_overhang="TGCA",
-    )["config"]
-
-    assembly = applied["assembly_interfaces"]
-    assert assembly["notation"] == CANONICAL_NOTATION
-    assert assembly["level_minus1_entry"][FIVE_PRIME_END] == "AAAA"
-    assert assembly["level_minus1_entry"][THREE_PRIME_END] == "CCCC"
-    assert assembly["level_minus1_entry"][THREE_PRIME_CODING_SITE] == "GGGG"
-    junction = assembly["junctions"]["terminal_to_cds2"]
-    assert junction["upstream_three_prime_end_overhang"] == "AGTC"
-    assert junction["downstream_five_prime_end_overhang"] == "GACT"
-    assert junction["assembled_coding_site"] == "AGTC"
-    # Short historical aliases remain available to older consumers.
-    assert assembly["level0"]["block_junctions"]["cds1_to_cds2"] == {
-        "upstream_c": "AGTC",
-        "downstream_n": "GACT",
-        "arelf_offset_nt": 11,
-    }
-
-
-def test_dashboard_widget_labels_map_terminal_sides_to_sequence_ends(
-    tmp_path: Path,
-) -> None:
-    panel = GraspControlPanel(build_default_config(tmp_path), input_dir=tmp_path)
-
-    assert panel.entry_n.description == "Entry 5′ / N side"
-    assert panel.entry_c.description == "Entry 3′ / C side"
-    assert panel.cds1_c.description == "CDS1→2 3′ / C"
-    assert panel.cds2_n.description == "CDS2←1 5′ / N"
-    assert panel.entry_c.value == "GGAG"
-    assert panel.cds1_c.value == "CTTC"
-    assert panel.cds2_n.value == "GAAG"
-
-
-def test_form_settings_reject_mismatched_physical_end_overhangs(tmp_path: Path):
-    cfg = build_default_config(tmp_path)
-    with pytest.raises(ValueError, match="must be reverse complements"):
-        apply_form_settings(
-            cfg,
-            **_form_kwargs(),
-            cds1_to_cds2_upstream_3prime_c_terminal_side_overhang="CTTC",
-            cds1_to_cds2_downstream_5prime_n_terminal_side_overhang="AAAA",
-        )
-
-
-def test_form_settings_reject_cut_outside_arelf(tmp_path: Path):
-    cfg = build_default_config(tmp_path)
-    with pytest.raises(ValueError, match="between 0 and 11"):
-        apply_form_settings(
-            cfg,
-            **_form_kwargs(),
-            cds1_cds2_arelf_offset_nt=12,
-        )
-
-
-def test_form_can_select_deposited_grasp_vector_preset(tmp_path: Path):
-    cfg = build_default_config(tmp_path)
-    applied = apply_form_settings(
-        cfg,
-        **_form_kwargs(),
-        assembly_interface_preset="deposited_grasp",
+        level_minus1_5prime_overhang="AAAA",
+        level_minus1_3prime_overhang="CCCC",
+        level0_5prime_overhang="ATGC",
+        level0_3prime_overhang="CGTA",
+        level1_5prime_overhang="ACGT",
+        level1_3prime_overhang="TGCA",
     )["config"]
     profile = resolve_assembly_interfaces(applied)
 
-    assert profile["level_minus1_entry"]["vector_id"] == "pAGM1311"
-    assert profile["level_minus1_entry"][FIVE_PRIME_END] == "ACAT"
-    assert profile["level_minus1_entry"][THREE_PRIME_END] == "ACAA"
-    assert profile["level_minus1_entry"][THREE_PRIME_CODING_SITE] == "TTGT"
-    assert profile["level0"]["acceptor_id"] == "pAGM9121"
+    assert profile["profile_name"] == "custom"
+    assert _ends(profile) == {
+        "level_minus1": ("AAAA", "CCCC"),
+        "level0": ("ATGC", "CGTA"),
+        "level1": ("ACGT", "TGCA"),
+    }
+    assert profile["level_minus1_entry"][FIVE_PRIME_CODING_SITE] == "AAAA"
+    assert profile["level_minus1_entry"][THREE_PRIME_CODING_SITE] == "GGGG"
+    assert profile["level0"]["acceptor_outer"][THREE_PRIME_CODING_SITE] == "TACG"
+    assert profile["final_cassette"][THREE_PRIME_CODING_SITE] == "TGCA"
+
+
+def test_dashboard_overhang_section_has_exactly_six_plain_end_fields(tmp_path: Path):
+    panel = GraspControlPanel(build_default_config(tmp_path), input_dir=tmp_path)
+    fields = (
+        panel.level_minus1_5prime,
+        panel.level_minus1_3prime,
+        panel.level0_5prime,
+        panel.level0_3prime,
+        panel.level1_5prime,
+        panel.level1_3prime,
+    )
+
+    assert [field.description for field in fields] == [
+        "5′ overhang",
+        "3′ overhang",
+        "5′ overhang",
+        "3′ overhang",
+        "5′ overhang",
+        "3′ overhang",
+    ]
+    assert [field.value for field in fields] == [
+        "ACAT",
+        "ACAA",
+        "CTCA",
+        "CTCG",
+        "GGAG",
+        "AGCG",
+    ]
+
+
+def test_notebook_forms_expose_the_same_six_overhang_fields():
+    root = Path(__file__).parents[1]
+    notebooks = (
+        root / "grasp_library_designer.ipynb",
+        root / "grasp_oneshot_designer.ipynb",
+        root / "grasp_library" / "notebooks" / "grasp_library_designer.ipynb",
+        root / "grasp_library" / "notebooks" / "grasp_oneshot_designer.ipynb",
+    )
+    expected = {
+        "level_minus1_5prime_overhang": "ACAT",
+        "level_minus1_3prime_overhang": "ACAA",
+        "level0_5prime_overhang": "CTCA",
+        "level0_3prime_overhang": "CTCG",
+        "level1_5prime_overhang": "GGAG",
+        "level1_3prime_overhang": "AGCG",
+    }
+
+    for path in notebooks:
+        notebook = json.loads(path.read_text())
+        source = "".join(
+            "".join(cell.get("source", [])) for cell in notebook["cells"]
+        )
+        observed = {}
+        for line in source.splitlines():
+            if "#@param" not in line or "_overhang =" not in line:
+                continue
+            name, value = line.split("=", 1)
+            observed[name.strip()] = value.split("#", 1)[0].strip().strip('"')
+        assert observed == expected, path
+def test_form_rejects_invalid_level_overhang(tmp_path: Path):
+    cfg = build_default_config(tmp_path)
+    with pytest.raises(ValueError, match="Level 0 3′ overhang"):
+        apply_form_settings(
+            cfg,
+            **_form_kwargs(),
+            level0_3prime_overhang="XYZ",
+        )
+
+
+def test_deposited_preset_rejects_edited_standard_overhangs(tmp_path: Path):
+    cfg = build_default_config(tmp_path)
+    with pytest.raises(ValueError, match="requires the deposited 5′/3′ overhangs"):
+        apply_form_settings(
+            cfg,
+            **_form_kwargs(),
+            assembly_interface_preset="deposited_grasp",
+            level1_3prime_overhang="AAAA",
+        )

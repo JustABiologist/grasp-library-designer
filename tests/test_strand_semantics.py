@@ -45,11 +45,11 @@ def test_deposited_cds1_cds2_site_and_directional_terminals_are_distinct():
     assert cds2.oh5 == cds2.oh5_coding_site_5to3 == "CTTC"
 
     # The physical ends are written separately and directionally, both 5′->3′.
-    assert cds1.c_terminal_overhang_5p == "CTTC"
-    assert cds2.n_terminal_overhang_5p == "GAAG"
+    assert cds1.three_prime_end_overhang == "GAAG"
+    assert cds2.five_prime_end_overhang == "CTTC"
     assert (
-        reverse_complement(cds1.c_terminal_overhang_5p)
-        == cds2.n_terminal_overhang_5p
+        reverse_complement(cds1.three_prime_end_overhang)
+        == cds2.five_prime_end_overhang
     )
 
 
@@ -57,13 +57,12 @@ def test_movable_interblock_cut_keeps_coding_site_but_orients_terminals():
     config = {
         "overhang_redesign": {"cut_mode": "movable_arelf"},
         "assembly_interfaces": {
-            "level0": {
-                "block_junctions": {
-                    "cds1_to_cds2": {
-                        "upstream_c": "ATTC",
-                        "downstream_n": "GAAT",
-                        "arelf_offset_nt": 11,
-                    }
+            "junctions": {
+                "terminal_to_cds2": {
+                    "upstream_three_prime_end_overhang": "GAAT",
+                    "downstream_five_prime_end_overhang": "ATTC",
+                    "assembled_coding_site": "ATTC",
+                    "arelf_offset_nt": 11,
                 }
             }
         },
@@ -74,8 +73,8 @@ def test_movable_interblock_cut_keeps_coding_site_but_orients_terminals():
 
     assert parts.loc["1E_LD5N", "oh3_coding_site_5to3"] == "ATTC"
     assert parts.loc["2A_LD5N", "oh5_coding_site_5to3"] == "ATTC"
-    assert parts.loc["1E_LD5N", "c_terminal_overhang_5p"] == "ATTC"
-    assert parts.loc["2A_LD5N", "n_terminal_overhang_5p"] == "GAAT"
+    assert parts.loc["1E_LD5N", "three_prime_end_overhang"] == "GAAT"
+    assert parts.loc["2A_LD5N", "five_prime_end_overhang"] == "ATTC"
 
 
 @pytest.mark.parametrize(
@@ -112,7 +111,7 @@ def test_assembly_checks_both_coding_overlap_and_directional_block_pair(
 
     bad = parts.copy()
     bad.loc[
-        bad.part_id.str.startswith("2A_"), "n_terminal_overhang_5p"
+        bad.part_id.str.startswith("2A_"), "five_prime_end_overhang"
     ] = "AAAA"
     with pytest.raises(ValueError, match="directional terminal mismatch"):
         simulate_assembled_cds(plan, library, parts_full=bad)

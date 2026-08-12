@@ -5,23 +5,20 @@ Imported from the deposited GenBank modules (`GRASP_-1.gb` / Assembly Planner).
 - Paper: https://academic.oup.com/nar/article/53/20/gkaf1169/8321212
 - Data: https://github.com/farleykvdg/GRASP
 
-The GenBank overhang features define the native design. Redesign candidates are
-not tied to those indices: the program enumerates every synonymous four-base
-window whose motif-relative start is 0–11 inside invariant `ARELF`, then
-rematerializes the part window and coding mask (synonymous redesign only).
+The CSV junction coordinates record the deposited design. Runtime redesign is
+not tied to those indices: every synonymous four-base window fully inside the
+invariant ARELF motif (offsets 0–11) is eligible.
 
-Order fragments use configurable BsaI entry-vector overhangs; BpiI then releases
-modules into the configured Level 0 acceptor. The deposited GRASP preset uses
-pAGM1311 then pAGM9121. Terminal-side labels name the physical end of the
-coding-oriented construct: N-terminal side = 5′ end and C-terminal side = 3′
-end. Every overhang label is written 5′→3′, so compatible ends are reverse
-complements. Custom defaults use entry 5′/N—3′/C `AACA/GGAG`, CDS1
-3′/C—CDS2 5′/N `CTTC/GAAG`, and final cassette 5′/N—3′/C `GCCC/GCGA`.
+Order fragments use configurable physical 5′ and 3′ overhangs at each cloning
+level. The deposited defaults are Level −1 `ACAT/ACAA`, Level 0 `CTCA/CTCG`,
+and Level 1 `GGAG/AGCG`, with every value written 5′→3′. Retained coding-strand
+sites and internal architecture junctions are derived. The deposited workflow
+uses pAGM1311 followed by pAGM9121.
 
-Deposited pAGM1311 preset order-strand geometry:
+Deposited-preset order-strand geometry:
 TTTGGTCTCAACAT{{pAGM1311 insert}}TTGTTGAGACCAAA
 
-Deposited GRASP PPR block chains (not complete expression cassettes):
+Deposited PPR block chains (not complete expression constructs):
 - 9S: AGGT–CDS1–CTTC–CDS2–TTCG
 - 14S: AGGT–CDS1–GTGA–CDS14–CTTC–CDS2–TTCG
 - 19S: AGGT–CDS1–GTGA–CDS14–CACG–CDS19–CTTC–CDS2–TTCG

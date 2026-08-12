@@ -52,16 +52,16 @@ def grasp_parts():
     return build_parts_table(load_grasp_records([genbank]))
 
 
-def movable_config(**block_junctions):
+def movable_config(**junctions):
     config = {
         "overhang_redesign": {
             "cut_mode": "movable_arelf",
             "allowed_arelf_offsets_nt": list(range(12)),
         }
     }
-    if block_junctions:
+    if junctions:
         config["assembly_interfaces"] = {
-            "level0": {"block_junctions": block_junctions}
+            "junctions": junctions,
         }
     return config
 
@@ -133,7 +133,7 @@ def test_materialized_internal_cuts_are_inside_arelf_and_keep_roles(
                 for motif_start in full_motifs
             )
 
-    # Deposited N-terminal prefixes and recognition-code residues survive.
+    # Deposited 5′ prefixes and recognition-code residues survive.
     first = parts.set_index("part_id").loc["1A_5T_AGGT"]
     assert first.aa_sequence.startswith("QGGNSEEPRKSFDERPERGVVSWT")
     middle = parts.set_index("part_id").loc["B_LD5N"]
@@ -185,9 +185,10 @@ def test_configured_block_interfaces_are_paired_and_materialized(
     grasp_parts, codon_data
 ):
     custom = {
-        "cds1_to_cds2": {
-            "upstream_c": "ATTC",
-            "downstream_n": "GAAT",
+        "terminal_to_cds2": {
+            "upstream_three_prime_end_overhang": "GAAT",
+            "downstream_five_prime_end_overhang": "ATTC",
+            "assembled_coding_site": "ATTC",
             "arelf_offset_nt": 11,
         }
     }
@@ -200,36 +201,14 @@ def test_configured_block_interfaces_are_paired_and_materialized(
     assert parts.loc["1E_LD5N", "oh3"] == "ATTC"
     assert parts.loc["2A_LD5N", "oh5"] == "ATTC"
 
-    custom["cds1_to_cds2"]["downstream_n"] = "AAAA"
-    with pytest.raises(ValueError, match="reverse complement"):
+    custom["terminal_to_cds2"]["downstream_five_prime_end_overhang"] = "AAAA"
+    with pytest.raises(ValueError, match="reverse_complement"):
         materialize_arelf_parts(
             grasp_parts,
             {},
             config=movable_config(**custom),
             codon_data=codon_data,
         )
-
-
-def test_canonical_assembly_interface_schema_is_supported(grasp_parts, codon_data):
-    config = movable_config()
-    config["assembly_interfaces"] = {
-        "junctions": {
-            "terminal_to_cds2": {
-                "upstream_c_5p": "ATTC",
-                "downstream_n_5p": "GAAT",
-                "assembled_plus_site": "ATTC",
-                "arelf_offset_nt": 11,
-            }
-        }
-    }
-    parts = materialize_arelf_parts(
-        grasp_parts,
-        {},
-        config=config,
-        codon_data=codon_data,
-    ).set_index("part_id")
-    assert parts.loc["1E_LD5N", "oh3"] == "ATTC"
-    assert parts.loc["2A_LD5N", "oh5"] == "ATTC"
 
 
 @pytest.mark.parametrize("length", [9, 14, 19])
