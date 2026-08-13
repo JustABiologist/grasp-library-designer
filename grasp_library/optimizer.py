@@ -547,7 +547,9 @@ def optimize_library(
         if len(set(sequences)) != len(sequences):
             log(f"  Warning: not all versions for {row['part_id']} were DNA-distinct.")
 
-    return pd.DataFrame(results)
+    from .binder import annotate_module_roles
+
+    return annotate_module_roles(pd.DataFrame(results))
 
 
 def simulate_assembled_cds(

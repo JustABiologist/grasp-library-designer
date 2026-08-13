@@ -54,6 +54,15 @@ from .import_grasp import (
     import_grasp_profile,
     pick_parts_for_target,
 )
+from .restriction_sites import (
+    COMMON_RESTRICTION_SITES,
+    DEFAULT_SITE_BLACKLIST,
+    apply_site_blacklist_to_config,
+    parse_site_blacklist,
+    resolve_site_blacklist,
+    restriction_site_names,
+    restriction_site_options,
+)
 from .synthesis_vendors import (
     ASSEMBLY_ENZYMES,
     GRASP_LIGATION_BY_LEVEL,
@@ -104,7 +113,13 @@ from .optimizer import (
     simulate_assembled_cds,
 )
 from .oneshot import run_oneshot_design, sanitize_rna_name
-from .binder import rna_to_binder_aa, describe_binder, normalize_target_rna
+from .binder import (
+    rna_to_binder_aa,
+    describe_binder,
+    describe_part_id,
+    annotate_module_roles,
+    normalize_target_rna,
+)
 from .gga_split import plan_gga_from_optimized_cds, suggest_fragment_count
 from .paths import (
     bundled_profile_genbank,
@@ -112,6 +127,7 @@ from .paths import (
     project_paths,
 )
 from .colab import write_notebook
+from .genbank_export import write_annotated_genbank
 
 try:
     from importlib.metadata import PackageNotFoundError, version
@@ -161,6 +177,13 @@ __all__ = [
     "compile_target_gap",
     "pick_parts_for_target",
     "SYNTHESIS_VENDORS",
+    "COMMON_RESTRICTION_SITES",
+    "DEFAULT_SITE_BLACKLIST",
+    "apply_site_blacklist_to_config",
+    "parse_site_blacklist",
+    "resolve_site_blacklist",
+    "restriction_site_names",
+    "restriction_site_options",
     "ASSEMBLY_ENZYMES",
     "LIGATION_TABLES",
     "GRASP_LIGATION_BY_LEVEL",
@@ -209,6 +232,8 @@ __all__ = [
     "sanitize_rna_name",
     "rna_to_binder_aa",
     "describe_binder",
+    "describe_part_id",
+    "annotate_module_roles",
     "normalize_target_rna",
     "plan_gga_from_optimized_cds",
     "suggest_fragment_count",
@@ -216,5 +241,6 @@ __all__ = [
     "materialize_project",
     "project_paths",
     "write_notebook",
+    "write_annotated_genbank",
     "__version__",
 ]

@@ -29,6 +29,11 @@ from .sample_codon_tables import (
     UPLOAD_OWN_TABLE,
     sample_names,
 )
+from .restriction_sites import (
+    DEFAULT_SITE_BLACKLIST,
+    apply_site_blacklist_to_config,
+    restriction_site_options,
+)
 from .synthesis_vendors import (
     GRASP_STAGE_MATCHED_LIGATION,
     apply_enzyme_to_config,
@@ -127,10 +132,12 @@ def build_default_config(input_dir: Path) -> Dict[str, Any]:
         "codon_usage_file": input_dir / "codon_usage.csv",
         "parts_file": input_dir / "parts.csv",
         "target_map_file": input_dir / "target_map.csv",
+        "site_blacklist": list(DEFAULT_SITE_BLACKLIST),
         "forbidden_sites": {
             "BsaI": "GGTCTC",
             "BpiI": "GAAGAC",
             "BsmBI": "CGTCTC",
+            "SapI": "GCTCTTC",
         },
         "synthesis": {
             "global_gc_min": 0.25,
@@ -265,6 +272,20 @@ class GraspControlPanel:
             description="Internal-site filter",
             **_DD_WIDE,
         )
+        known_sites = {name for _, name in restriction_site_options()}
+        selected_blacklist = [
+            name
+            for name in self.config.get("site_blacklist", DEFAULT_SITE_BLACKLIST)
+            if name in known_sites
+        ]
+        self.site_blacklist = widgets.SelectMultiple(
+            options=restriction_site_options(),
+            value=selected_blacklist or list(DEFAULT_SITE_BLACKLIST),
+            description="Cut-site blacklist",
+            rows=10,
+            style={"description_width": "140px"},
+            layout=widgets.Layout(width="520px"),
+        )
         self.ligation = widgets.Dropdown(
             options=redesign_ligation_table_names(),
             value=self.config.get("ligation", {}).get(
@@ -393,6 +414,7 @@ class GraspControlPanel:
             self.architecture,
             self.vendor,
             self.enzyme,
+            self.site_blacklist,
             self.ligation,
             self.redesign_plasmid,
             self.redesign_level0,
@@ -462,6 +484,17 @@ class GraspControlPanel:
                 _label("Synthesis & assembly"),
                 self.vendor,
                 self.enzyme,
+                self.site_blacklist,
+                widgets.HTML(
+                    value=(
+                        "<div style='font-family:-apple-system,sans-serif;font-size:12px;"
+                        "color:#3d5248;margin:2px 0 8px 0'>"
+                        "⌘/Ctrl-click to select several. Default: <b>SapI, BsaI, BpiI</b>. "
+                        "These sites are removed from designed CDS, in addition to the "
+                        "assembly-enzyme filter above."
+                        "</div>"
+                    )
+                ),
                 self.ligation,
                 widgets.HTML(
                     value=(
@@ -625,6 +658,7 @@ class GraspControlPanel:
 
         cfg = apply_vendor_to_config(cfg, self.vendor.value)
         cfg = apply_enzyme_to_config(cfg, self.enzyme.value)
+        cfg = apply_site_blacklist_to_config(cfg, self.site_blacklist.value)
         cfg = apply_ligation_table_to_config(cfg, self.ligation.value)
 
         cfg["genetic_code"] = int(self.genetic_code.value)
@@ -869,6 +903,10 @@ class GraspControlPanel:
                 f"Synthesis: <b>{self.config['synthesis_vendor']}</b> · "
                 f"GC {synth['global_gc_min']*100:.0f}–{synth['global_gc_max']*100:.0f}% · "
                 f"max HP {synth['max_homopolymer']}<br/>"
+                f"Cut-site blacklist: <b>"
+                f"{', '.join(self.config.get('site_blacklist') or []) or 'none'}</b> · "
+                f"forbidden: <code>"
+                f"{', '.join(self.config.get('forbidden_sites') or []) or 'none'}</code><br/>"
                 f"Plasmid overhangs: <b>"
                 f"{'CUSTOM fields' if self.config['overhang_redesign'].get('plasmid_overhangs') else 'fields as fixed'}"
                 f"</b> · Level 0 junctions: <b>"

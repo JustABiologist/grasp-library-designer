@@ -389,7 +389,9 @@ def materialize_arelf_parts(
             }
         )
         rows.append(row)
-    return pd.DataFrame(rows)
+    from .binder import annotate_module_roles
+
+    return annotate_module_roles(pd.DataFrame(rows))
 
 
 def dynamic_junction_map(parts_df: pd.DataFrame) -> pd.DataFrame:

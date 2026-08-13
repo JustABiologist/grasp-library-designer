@@ -455,7 +455,11 @@ def build_parts_table(records: Sequence[dict]) -> pd.DataFrame:
         }
         for r in records
     ]
-    return pd.DataFrame(rows).sort_values("part_id").reset_index(drop=True)
+    from .binder import annotate_module_roles
+
+    return annotate_module_roles(
+        pd.DataFrame(rows).sort_values("part_id").reset_index(drop=True)
+    )
 
 
 def build_junction_map_9s(records: Sequence[dict]) -> pd.DataFrame:
@@ -940,7 +944,9 @@ def compile_target_gap(
                 "assembly_order": orders[i],
             }
         )
-    return pd.DataFrame(rows)
+    from .binder import annotate_module_roles
+
+    return annotate_module_roles(pd.DataFrame(rows))
 
 
 if __name__ == "__main__":

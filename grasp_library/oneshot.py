@@ -376,6 +376,10 @@ def run_oneshot_design(
     orderable["oligo_sequence_5to3"] = orderable["oligo_sequence_5to3"].map(clean_dna)
     orderable["order_sequence_5to3"] = orderable["oligo_sequence_5to3"]
 
+    from .binder import annotate_module_roles
+
+    orderable = annotate_module_roles(orderable)
+
     level0 = _validate_level0_groups(plan, orderable, interfaces)
     assembled = simulate_assembled_cds(
         plan,
@@ -434,6 +438,10 @@ def run_oneshot_design(
     )
     order_fasta.write_text(fasta_text)
     legacy_fasta.write_text(fasta_text)
+    from .genbank_export import write_annotated_genbank
+
+    order_gb = output_dir / f"oneshot_{rna}_orderable_fragments.gb"
+    write_annotated_genbank(orderable, order_gb, config=local_config)
     binding_tract_fasta.write_text(
         f">GRASP_{rna}|binding_tract_CDS_context|not_expression_cassette\n"
         f"{assembled['assembled_cds']}\n"
@@ -545,6 +553,7 @@ def run_oneshot_design(
         "oligo_fasta": legacy_fasta,
         "order_csv": order_csv,
         "order_fasta": order_fasta,
+        "order_genbank": order_gb,
         "level0_csv": level0_path,
         "ppr_block_chain_csv": ppr_chain_path,
         "binding_tract_fasta": binding_tract_fasta,

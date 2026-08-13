@@ -139,6 +139,7 @@ def test_oneshot_exports_standard_grasp_requirements_and_ppr_chain(
     ).eq(1).all()
     assert result["order_csv"].exists()
     assert result["order_fasta"].exists()
+    assert result["order_genbank"].exists()
     assert result["ppr_block_chain_csv"].exists()
     assert result["binding_tract_fasta"].exists()
 

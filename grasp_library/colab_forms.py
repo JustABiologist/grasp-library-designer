@@ -14,6 +14,7 @@ from .assembly_interfaces import (
     deposited_grasp_interface_preset,
 )
 from .codon_tables import apply_organism_codon_table, load_codon_usage
+from .restriction_sites import DEFAULT_SITE_BLACKLIST, apply_site_blacklist_to_config
 from .sample_codon_tables import SAMPLE_CODON_TABLES, UPLOAD_OWN_TABLE
 from .synthesis_vendors import (
     apply_enzyme_to_config,
@@ -32,6 +33,7 @@ def apply_form_settings(
     synthesis_vendor: str,
     assembly_enzyme: str,
     ligation_table: str,
+    site_blacklist: str = ",".join(DEFAULT_SITE_BLACKLIST),
     overhang_redesign: bool = False,
     redesign_plasmid_overhangs: bool = False,
     redesign_level0_junctions: Optional[bool] = None,
@@ -218,6 +220,7 @@ def apply_form_settings(
 
     cfg = apply_vendor_to_config(cfg, synthesis_vendor)
     cfg = apply_enzyme_to_config(cfg, assembly_enzyme)
+    cfg = apply_site_blacklist_to_config(cfg, site_blacklist)
     cfg = apply_ligation_table_to_config(cfg, ligation_table)
 
     codon_path = Path(cfg["codon_usage_file"])

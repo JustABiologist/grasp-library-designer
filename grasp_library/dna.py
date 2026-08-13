@@ -4,12 +4,31 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from functools import lru_cache
 from typing import Dict, Iterable, List
 
 from Bio.Seq import Seq
 
 DNA_ALPHABET = set("ACGT")
 MASK_ALPHABET = set("ACGTN")
+IUPAC_DNA = set("ACGTRYSWKMBDHVN")
+_IUPAC_TO_REGEX = {
+    "A": "A",
+    "C": "C",
+    "G": "G",
+    "T": "T",
+    "R": "[AG]",
+    "Y": "[CT]",
+    "S": "[GC]",
+    "W": "[AT]",
+    "K": "[GT]",
+    "M": "[AC]",
+    "B": "[CGT]",
+    "D": "[AGT]",
+    "H": "[ACT]",
+    "V": "[ACG]",
+    "N": "[ACGT]",
+}
 
 
 def clean_dna(sequence: str) -> str:
@@ -105,6 +124,24 @@ def local_gc_penalty(
     return penalty
 
 
+def clean_iupac_dna(sequence: str) -> str:
+    sequence = str(sequence).upper().replace("U", "T")
+    sequence = re.sub(r"\s+", "", sequence)
+    invalid = set(sequence) - IUPAC_DNA
+    if invalid:
+        raise ValueError(f"Invalid IUPAC DNA characters: {invalid}")
+    return sequence
+
+
+def reverse_complement_iupac(sequence: str) -> str:
+    return str(Seq(clean_iupac_dna(sequence)).reverse_complement())
+
+
+@lru_cache(maxsize=256)
+def _iupac_motif_regex(motif: str) -> re.Pattern[str]:
+    return re.compile("".join(_IUPAC_TO_REGEX[base] for base in motif))
+
+
 def contains_forbidden_site(
     sequence: str,
     forbidden_sites: Dict[str, str],
@@ -112,19 +149,29 @@ def contains_forbidden_site(
     sequence = clean_dna(sequence)
     hits = []
     for name, motif in forbidden_sites.items():
-        motif = clean_dna(motif)
-        motifs = {motif, reverse_complement(motif)}
-        for query in motifs:
-            start = sequence.find(query)
-            while start != -1:
+        motif = clean_iupac_dna(motif)
+        queries = {motif, reverse_complement_iupac(motif)}
+        for query in queries:
+            if set(query) <= DNA_ALPHABET:
+                start = sequence.find(query)
+                while start != -1:
+                    hits.append(
+                        {
+                            "enzyme": name,
+                            "site": query,
+                            "start_0based": start,
+                        }
+                    )
+                    start = sequence.find(query, start + 1)
+                continue
+            for match in _iupac_motif_regex(query).finditer(sequence):
                 hits.append(
                     {
                         "enzyme": name,
-                        "site": query,
-                        "start_0based": start,
+                        "site": match.group(0),
+                        "start_0based": match.start(),
                     }
                 )
-                start = sequence.find(query, start + 1)
     return hits
 
 

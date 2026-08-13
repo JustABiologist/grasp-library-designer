@@ -333,11 +333,22 @@ def run_library_optimize(
         if stale:
             library = library.drop(columns=stale)
         library = library.merge(metadata, on="part_id", how="left", validate="many_to_one")
+    from .binder import annotate_module_roles
+
+    library = annotate_module_roles(library)
     out = output_dir / "optimized_library.csv"
     library.to_csv(out, index=False)
     fasta = write_oligo_fasta(library, output_dir / "optimized_grasp_oligos.fasta")
+    from .genbank_export import write_annotated_genbank
+
+    gb_path = write_annotated_genbank(
+        library,
+        output_dir / "optimized_grasp_library.gb",
+        config=config,
+    )
     log(f"Done — {len(library)} sequences → {out}")
     log(f"Oligo FASTA → {fasta}")
+    log(f"Annotated GenBank → {gb_path}")
     return library
 
 
@@ -647,11 +658,15 @@ def export_optimized_library(
     output_dir: Path,
     *,
     selected_overhangs: Optional[Mapping[str, str]] = None,
+    config: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Path]:
-    """Write CSV / FASTA / Excel for the annealed combinatorial library."""
+    """Write CSV / FASTA / Excel / annotated GenBank for the annealed library."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    out = library.copy()
+    from .binder import annotate_module_roles
+    from .genbank_export import write_annotated_genbank
+
+    out = annotate_module_roles(library.copy())
     if selected_overhangs and "selected_overhangs" not in out.columns:
         tag = ";".join(f"{k}={v}" for k, v in sorted(selected_overhangs.items()))
         out["selected_overhangs"] = tag
@@ -659,14 +674,22 @@ def export_optimized_library(
     csv_path = output_dir / "optimized_grasp_oligos.csv"
     fasta_path = output_dir / "optimized_grasp_oligos.fasta"
     xlsx_path = output_dir / "optimized_grasp_library.xlsx"
+    gb_path = output_dir / "optimized_grasp_library.gb"
 
     out.to_csv(csv_path, index=False)
     write_oligo_fasta(out, fasta_path)
+    write_annotated_genbank(out, gb_path, config=config)
 
     qc_cols = [
         c
         for c in [
             "optimized_part_id",
+            "assembly_role",
+            "joins_upstream_role",
+            "joins_downstream_role",
+            "ppr_5th_aa",
+            "ppr_last_aa",
+            "target_rna_base",
             "translation_verified",
             "mask_verified",
             "codon_score",
@@ -684,7 +707,7 @@ def export_optimized_library(
         if qc_cols:
             out[qc_cols].to_excel(writer, sheet_name="QC", index=False)
 
-    return {"csv": csv_path, "fasta": fasta_path, "xlsx": xlsx_path}
+    return {"csv": csv_path, "fasta": fasta_path, "xlsx": xlsx_path, "genbank": gb_path}
 
 
 def compile_and_assemble_target(
@@ -769,6 +792,13 @@ def compile_and_assemble_target(
                 f"|length={row.oligo_length}|qc={row.qc_passed}\n"
                 f"{row.oligo_sequence_5to3}\n"
             )
+    from .genbank_export import write_annotated_genbank
+
+    selected_library = optimized_library[
+        optimized_library["optimized_part_id"].isin(oligos["optimized_part_id"])
+    ].copy()
+    oligo_gb_path = output_dir / f"target_{rna}_oligos.gb"
+    write_annotated_genbank(selected_library, oligo_gb_path, config=config)
 
     return {
         "assembly_plan": plan,
@@ -778,6 +808,7 @@ def compile_and_assemble_target(
         "assembled_fasta": fasta_path,
         "oligo_fasta": oligo_fasta_path,
         "oligo_csv": oligo_csv_path,
+        "oligo_genbank": oligo_gb_path,
         "target_rna": rna,
     }
 
@@ -905,6 +936,9 @@ def run_library_redesign_and_anneal(
         tag = ";".join(f"{k}={v}" for k, v in sorted(selected.items()))
         library = library.copy()
         library["selected_overhangs"] = tag
+        from .binder import annotate_module_roles
+
+        library = annotate_module_roles(library)
         library.to_csv(Path(output_dir) / "optimized_library.csv", index=False)
     return {
         "pareto_front": front,

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import List, Sequence, Tuple
+import re
+from typing import Dict, List, Optional, Sequence, Tuple
+
+import pandas as pd
 
 # Classic PPR code: (5th AA, last AA) of each repeat
 _RNA_TO_CODE = {
@@ -12,6 +15,24 @@ _RNA_TO_CODE = {
     "U": ("N", "D"),
     "T": ("N", "D"),
 }
+_CODE_TO_RNA = {pair: base for base, pair in _RNA_TO_CODE.items() if base != "T"}
+
+_JOIN = {
+    "A": ("", "B"),
+    "B": ("A", "C"),
+    "C": ("B", "D"),
+    "D": ("C", "E"),
+    "E": ("D", ""),
+}
+
+MODULE_ROLE_COLUMNS = (
+    "assembly_role",
+    "joins_upstream_role",
+    "joins_downstream_role",
+    "ppr_5th_aa",
+    "ppr_last_aa",
+    "target_rna_base",
+)
 
 # 5′-side solvating helix from Farley et al. GRASP 9S native assemblies
 FIVE_PRIME_SOLVATING_HELIX = "QGGNSEEPRKSFDERPERGVVS"
@@ -76,3 +97,86 @@ def describe_binder(target_rna: str) -> dict:
         "cds_length": 3 * len(aa),
         "n_repeats": len(pairs),
     }
+
+
+def assembly_role_from_part_id(part_id: str) -> str:
+    """Return the five-part Golden Gate slot A/B/C/D/E from a GRASP part id."""
+    prefix = str(part_id).split("_", 1)[0]
+    if prefix in _JOIN:
+        return prefix
+    if prefix.endswith("A"):
+        return "A"
+    if prefix.endswith("E"):
+        return "E"
+    return ""
+
+
+def recognition_residues_from_part_id(part_id: str) -> Tuple[Optional[str], Optional[str]]:
+    """Return (last AA, 5th AA) encoded in a deposited GRASP part id."""
+    match = re.search(r"_L([DN])5([NT])(?:_|$)", str(part_id))
+    if match:
+        return match.group(1), match.group(2)
+    first = re.search(r"_5([NT])(?:_|$)", str(part_id))
+    if first:
+        return None, first.group(1)
+    last = re.search(r"_L([DN])$", str(part_id))
+    if last:
+        return last.group(1), None
+    return None, None
+
+
+def target_rna_base_from_residues(
+    fifth: Optional[str],
+    last: Optional[str],
+) -> str:
+    """RNA base specified by a PPR (5th, last) pair; partial codes stay readable."""
+    if fifth and last:
+        return _CODE_TO_RNA.get((fifth, last), "")
+    if fifth == "T":
+        return "A or G"
+    if fifth == "N":
+        return "C or U"
+    if last == "D":
+        return "G or U"
+    if last == "N":
+        return "A or C"
+    return ""
+
+
+def describe_part_id(part_id: str) -> Dict[str, str]:
+    """Label a library module by Golden Gate slot and PPR recognition code."""
+    role = assembly_role_from_part_id(part_id)
+    upstream, downstream = _JOIN.get(role, ("", ""))
+    last, fifth = recognition_residues_from_part_id(part_id)
+    return {
+        "assembly_role": role,
+        "joins_upstream_role": upstream,
+        "joins_downstream_role": downstream,
+        "ppr_5th_aa": fifth or "",
+        "ppr_last_aa": last or "",
+        "target_rna_base": target_rna_base_from_residues(fifth, last),
+    }
+
+
+def annotate_module_roles(df: pd.DataFrame) -> pd.DataFrame:
+    """Add A–E slot and RNA-target columns next to part_id."""
+    if df is None or len(df) == 0 or "part_id" not in df.columns:
+        return df
+    out = df.copy()
+    extra = pd.DataFrame(
+        [describe_part_id(str(part_id)) for part_id in out["part_id"]],
+        index=out.index,
+    )
+    for column in MODULE_ROLE_COLUMNS:
+        out[column] = extra[column]
+    lead = [
+        column
+        for column in ("order_fragment_id", "optimized_part_id", "part_id")
+        if column in out.columns
+    ]
+    rest = [
+        column
+        for column in out.columns
+        if column not in lead and column not in MODULE_ROLE_COLUMNS
+    ]
+    return out[lead + list(MODULE_ROLE_COLUMNS) + rest]

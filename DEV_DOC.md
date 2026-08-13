@@ -102,7 +102,8 @@ Config is a nested `dict`, not a typed model. Keys that matter most:
 - `ligation` / per-level protocols in `synthesis_vendors`
 - `optimizer.iterations_per_part` — `0` = greedy only (used during Pareto)
 - `synthesis` + `synthesis_vendor_meta` — QC heuristics
-- `forbidden_sites` — BsaI / BpiI / BsmBI by default
+- `forbidden_sites` — BsaI / BpiI / BsmBI plus the cut-site blacklist (default SapI, BsaI, BpiI)
+- `site_blacklist` — extra enzymes to deplete; multi-select of ~100 common cutters
 - `genetic_code`, `target_rna`, `architecture`
 
 `build_default_config(input_dir)` is the constructor. Colab Forms go through
@@ -139,6 +140,7 @@ touch.
 | `assembly_interfaces.py` * | Presets (`deposited_grasp`, `custom`), physical 5′/3′ overhangs vs assembled coding sites, `build_order_fragment` / `extract_order_payload`. Has its own `reverse_complement` (duplicate of `dna.py`). |
 | `oneshot.py` * | `run_oneshot_design()`, in-silico order-fragment + PPR block-chain checks. Does not claim whole-vector or wet-lab validation. |
 | `dna.py` | Clean DNA/mask, RC, GC, homopolymer, k-mer penalties, forbidden sites, mask overlay. |
+| `restriction_sites.py` | ~100-enzyme cut-site blacklist (default SapI / BsaI / BpiI) merged into `forbidden_sites`. |
 
 ### 4.4 Domain: scoring and optimization
 
