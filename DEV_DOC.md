@@ -229,7 +229,7 @@ package, falling back to `third_party/` in a raw checkout.
 
 `grasp_oneshot_designer.ipynb` and `grasp_library_designer.ipynb` are what
 the README Colab badges open. Cell **0 · Install** currently pins PyPI
-(`grasp-library-designer>=0.1.12`) and purges stale `grasp_library` modules
+(`grasp-library-designer>=0.1.13`) and purges stale `grasp_library` modules
 from `sys.modules`. Keep that purge if you change the install cell.
 
 ---
