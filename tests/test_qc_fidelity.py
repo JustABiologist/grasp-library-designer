@@ -4,6 +4,8 @@ from unittest.mock import patch
 
 import pytest
 
+import pandas as pd
+
 from grasp_library.ligation_fidelity import LigationFidelityCalculator
 from grasp_library.optimizer import synthesis_qc
 from grasp_library.pareto import score_overhang_set_ggassembler
@@ -11,6 +13,7 @@ from grasp_library.synthesis_vendors import (
     apply_enzyme_to_config,
     apply_vendor_to_config,
 )
+from grasp_library.workflows import qc_report_frame, write_qc_sheet
 
 
 @pytest.fixture
@@ -37,6 +40,84 @@ def qc_config() -> dict:
             "machine_hard_constraints": {"max_homopolymer": 13},
         },
     }
+
+
+def test_homopolymer_qc_lists_every_overlong_stretch(qc_config: dict) -> None:
+    result = synthesis_qc("ATGAAAAAAATGCTTTTTGC", qc_config, sequence_kind="cds")
+
+    assert "A7@4" in result["homopolymer_detail"]
+    assert "T5@14" in result["homopolymer_detail"]
+    assert result["homopolymer_count"] == 2
+    assert "Homopolymer too long: A7@4; T5@14" == result["warnings"]
+
+
+def test_high_and_low_gc_are_labelled_with_percent(qc_config: dict) -> None:
+    qc_config["synthesis"]["global_gc_min"] = 0.25
+    qc_config["synthesis"]["global_gc_max"] = 0.65
+    qc_config["synthesis"]["window_gc_min"] = 0.20
+    qc_config["synthesis"]["window_gc_max"] = 0.80
+    qc_config["synthesis"]["max_homopolymer"] = 20
+
+    high = synthesis_qc("GCGCGCGCGCGC", qc_config, sequence_kind="cds")
+    assert high["gc_status"].startswith("HIGH")
+    assert "100%" in high["gc_status"]
+    assert "Global GC HIGH" in high["warnings"]
+    assert "HIGH" in high["local_gc_detail"]
+
+    low = synthesis_qc("ATATATATATAT", qc_config, sequence_kind="cds")
+    assert low["gc_status"].startswith("LOW")
+    assert "Global GC LOW" in low["warnings"]
+
+
+def test_blacklist_cutters_are_reported(qc_config: dict) -> None:
+    qc_config["forbidden_sites"] = {"SapI": "GCTCTTC", "BsaI": "GGTCTC"}
+    result = synthesis_qc("AAAGCTCTTCAAAGGTCTCAAA", qc_config, sequence_kind="cds")
+
+    assert result["blacklist_tested"] == "SapI, BsaI"
+    assert "SapI GCTCTTC @4" in result["blacklist_hits"]
+    assert "BsaI GGTCTC @14" in result["blacklist_hits"]
+    assert "Forbidden restriction site in CDS: SapI" in result["failures"]
+
+
+def test_excel_qc_sheet_includes_detail_columns(tmp_path) -> None:
+    library = pd.DataFrame(
+        [
+            {
+                "optimized_part_id": "B_LD5N_v1",
+                "part_id": "B_LD5N",
+                "qc_status": "WARNING",
+                "qc_passed": False,
+                "translation_verified": True,
+                "mask_verified": True,
+                "codon_score": -0.2,
+                "cds_gc_pct": 72.0,
+                "cds_gc_status": "HIGH 72% (max 65%)",
+                "cds_local_gc": "HIGH 88% @ 13–62",
+                "cds_longest_homopolymer": 6,
+                "cds_homopolymers": "A6@13; T5@40",
+                "cds_repeats": "",
+                "blacklist_tested": "SapI, BsaI, BpiI",
+                "blacklist_hits": "none",
+                "cds_warnings": "Global GC HIGH 72% (max 65%)",
+                "cds_failures": "",
+                "oligo_length": 180,
+                "oligo_gc_pct": 55.0,
+                "oligo_gc_status": "OK 55%",
+                "oligo_homopolymers": "A6@27",
+                "oligo_warnings": "Homopolymer too long: A6@27",
+                "oligo_failures": "",
+            }
+        ]
+    )
+    xlsx = tmp_path / "qc.xlsx"
+    with pd.ExcelWriter(xlsx) as writer:
+        write_qc_sheet(writer, library)
+    qc = pd.read_excel(xlsx, sheet_name="QC")
+
+    assert list(qc.columns) == list(qc_report_frame(library).columns)
+    assert qc.loc[0, "cds_homopolymers"] == "A6@13; T5@40"
+    assert qc.loc[0, "cds_gc_status"] == "HIGH 72% (max 65%)"
+    assert qc.loc[0, "blacklist_tested"] == "SapI, BsaI, BpiI"
 
 
 def test_soft_synthesis_deviation_is_warning_not_clean_pass(qc_config: dict) -> None:

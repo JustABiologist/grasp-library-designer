@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from functools import lru_cache
-from typing import Dict, Iterable, List
+from typing import Dict, List, Mapping, Sequence
 
 from Bio.Seq import Seq
 
@@ -78,11 +78,147 @@ def mask_matches(sequence: str, mask: str) -> bool:
     )
 
 
-def longest_homopolymer(sequence: str) -> int:
+def format_pct(fraction: float) -> str:
+    text = f"{float(fraction) * 100:.1f}"
+    if text.endswith(".0"):
+        text = text[:-2]
+    return f"{text}%"
+
+
+def homopolymer_runs(sequence: str, min_length: int = 1) -> List[dict]:
+    """Return every A/C/G/T run at least ``min_length`` long."""
     sequence = clean_dna(sequence)
-    return max(
-        (len(match.group(0)) for match in re.finditer(r"(A+|C+|G+|T+)", sequence)),
-        default=0,
+    runs = []
+    for match in re.finditer(r"(A+|C+|G+|T+)", sequence):
+        length = len(match.group(0))
+        if length >= min_length:
+            runs.append(
+                {
+                    "base": match.group(0)[0],
+                    "length": length,
+                    "start_0based": match.start(),
+                }
+            )
+    return runs
+
+
+def longest_homopolymer(sequence: str) -> int:
+    return max((run["length"] for run in homopolymer_runs(sequence)), default=0)
+
+
+def notable_homopolymers(sequence: str, max_allowed: int) -> List[dict]:
+    """All over-limit runs; if none, every run tied for longest."""
+    runs = homopolymer_runs(sequence)
+    over = [run for run in runs if run["length"] > int(max_allowed)]
+    if over:
+        return over
+    if not runs:
+        return []
+    longest = max(run["length"] for run in runs)
+    return [run for run in runs if run["length"] == longest]
+
+
+def format_homopolymer_runs(runs: Sequence[Mapping]) -> str:
+    return "; ".join(
+        f"{run['base']}{int(run['length'])}@{int(run['start_0based']) + 1}"
+        for run in runs
+    )
+
+
+def gc_window_violations(
+    sequence: str,
+    window_size: int,
+    gc_min: float,
+    gc_max: float,
+) -> List[dict]:
+    """Merged local HIGH/LOW GC spans; overlapping windows collapse to one."""
+    sequence = clean_dna(sequence)
+    if not sequence:
+        return []
+    raw: List[dict] = []
+    if len(sequence) <= window_size:
+        value = gc_fraction(sequence)
+        kind = "HIGH" if value > gc_max else "LOW" if value < gc_min else None
+        if kind:
+            raw.append(
+                {"kind": kind, "start": 0, "end": len(sequence), "gc": value}
+            )
+    else:
+        for start in range(len(sequence) - window_size + 1):
+            value = gc_fraction(sequence[start : start + window_size])
+            if value > gc_max:
+                raw.append(
+                    {
+                        "kind": "HIGH",
+                        "start": start,
+                        "end": start + window_size,
+                        "gc": value,
+                    }
+                )
+            elif value < gc_min:
+                raw.append(
+                    {
+                        "kind": "LOW",
+                        "start": start,
+                        "end": start + window_size,
+                        "gc": value,
+                    }
+                )
+    merged: List[dict] = []
+    for window in raw:
+        if (
+            merged
+            and merged[-1]["kind"] == window["kind"]
+            and window["start"] <= merged[-1]["end"]
+        ):
+            merged[-1]["end"] = max(merged[-1]["end"], window["end"])
+            if window["kind"] == "HIGH":
+                merged[-1]["gc"] = max(merged[-1]["gc"], window["gc"])
+            else:
+                merged[-1]["gc"] = min(merged[-1]["gc"], window["gc"])
+        else:
+            merged.append(dict(window))
+    return merged
+
+
+def format_gc_windows(windows: Sequence[Mapping]) -> str:
+    return "; ".join(
+        f"{window['kind']} {format_pct(window['gc'])} "
+        f"@ {int(window['start']) + 1}–{int(window['end'])}"
+        for window in windows
+    )
+
+
+def repeated_kmer_hits(
+    sequence: str,
+    k: int,
+    min_count: int = 2,
+) -> List[dict]:
+    sequence = clean_dna(sequence)
+    if len(sequence) < k:
+        return []
+    starts: Dict[str, List[int]] = {}
+    for index in range(len(sequence) - k + 1):
+        starts.setdefault(sequence[index : index + k], []).append(index)
+    return [
+        {"kmer": kmer, "count": len(positions), "starts": positions}
+        for kmer, positions in starts.items()
+        if len(positions) >= min_count
+    ]
+
+
+def format_repeat_hits(hits: Sequence[Mapping]) -> str:
+    return "; ".join(
+        f"{hit['kmer']} ×{int(hit['count'])} @ "
+        + ", ".join(str(start + 1) for start in hit["starts"])
+        for hit in hits
+    )
+
+
+def format_forbidden_hits(hits: Sequence[Mapping]) -> str:
+    return "; ".join(
+        f"{hit['enzyme']} {hit['site']} @{int(hit['start_0based']) + 1}"
+        for hit in hits
     )
 
 

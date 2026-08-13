@@ -5,6 +5,10 @@ import pytest
 from grasp_library.colab_forms import apply_form_settings
 from grasp_library.control_panel import GraspControlPanel, build_default_config
 from grasp_library.dna import contains_forbidden_site
+from grasp_library.optimizer import (
+    optimize_coding_sequence,
+    repair_forbidden_sites,
+)
 from grasp_library.restriction_sites import (
     COMMON_RESTRICTION_SITES,
     DEFAULT_SITE_BLACKLIST,
@@ -83,6 +87,74 @@ def test_dashboard_blacklist_defaults_to_sapi_bsai_bpii(tmp_path: Path) -> None:
 
     assert tuple(panel.site_blacklist.value) == ("SapI", "BsaI", "BpiI")
     assert "EcoRI (GAATTC)" in [label for label, _ in panel.site_blacklist.options]
+
+
+def test_repair_recodes_gag_that_creates_sapi_before_locked_cttc() -> None:
+    allowed = [
+        [
+            {
+                "codon": "GAG",
+                "relative_adaptiveness": 1.0,
+                "probability": 0.7,
+                "frequency": 40,
+            },
+            {
+                "codon": "GAA",
+                "relative_adaptiveness": 0.7,
+                "probability": 0.3,
+                "frequency": 28,
+            },
+        ],
+        [
+            {
+                "codon": "CTC",
+                "relative_adaptiveness": 1.0,
+                "probability": 1.0,
+                "frequency": 1,
+            }
+        ],
+        [
+            {
+                "codon": "TTC",
+                "relative_adaptiveness": 1.0,
+                "probability": 1.0,
+                "frequency": 1,
+            }
+        ],
+    ]
+    repaired = repair_forbidden_sites(
+        "GAGCTCTTC", allowed, {"SapI": "GCTCTTC"}
+    )
+
+    assert repaired == "GAACTCTTC"
+    assert contains_forbidden_site(repaired, {"SapI": "GCTCTTC"}) == []
+
+
+def test_1e_module_can_be_optimized_with_default_sapi_blacklist(
+    tmp_path: Path,
+) -> None:
+    from grasp_library.codon_tables import apply_organism_codon_table
+    from grasp_library.import_grasp import import_grasp_profile
+    from grasp_library.paths import bundled_profile_genbank
+
+    imported = import_grasp_profile(bundled_profile_genbank(), tmp_path)
+    row = imported["parts"].set_index("part_id").loc["1E_LD5N"]
+    _, codon_data, _, _ = apply_organism_codon_table(
+        "Homo sapiens (Kazusa)",
+        tmp_path / "codon_usage.csv",
+    )
+    cfg = build_default_config(tmp_path)
+    cfg["optimizer"]["iterations_per_part"] = 20
+
+    sequence, _score = optimize_coding_sequence(
+        aa_sequence=row["aa_sequence"],
+        coding_mask=row["coding_mask"],
+        codon_data=codon_data,
+        config=cfg,
+    )
+
+    assert contains_forbidden_site(sequence, cfg["forbidden_sites"]) == []
+    assert sequence.endswith("CTCTTC")
 
 
 def test_form_settings_apply_default_blacklist(tmp_path: Path) -> None:

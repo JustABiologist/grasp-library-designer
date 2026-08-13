@@ -16,11 +16,19 @@ from .dna import (
     clean_dna,
     clean_mask,
     contains_forbidden_site,
+    format_forbidden_hits,
+    format_gc_windows,
+    format_homopolymer_runs,
+    format_pct,
+    format_repeat_hits,
     gc_fraction,
+    gc_window_violations,
     kmer_counts,
     local_gc_penalty,
     longest_homopolymer,
     mask_matches,
+    notable_homopolymers,
+    repeated_kmer_hits,
     repeated_kmer_penalty,
     reverse_complement,
     translate_dna,
@@ -179,6 +187,95 @@ def greedy_coding_sequence(allowed_codons: Sequence[Sequence[dict]]) -> str:
     )
 
 
+def _codon_indices_for_span(start: int, length: int, n_codons: int) -> List[int]:
+    last = (start + max(length, 1) - 1) // 3
+    return [index for index in range(start // 3, last + 1) if 0 <= index < n_codons]
+
+
+def repair_forbidden_sites(
+    sequence: str,
+    allowed_codons: Sequence[Sequence[dict]],
+    forbidden_sites: Mapping[str, str],
+    *,
+    max_passes: int = 80,
+) -> Optional[str]:
+    """Recode overlapping synonymous codons until blacklist sites are gone."""
+    sequence = clean_dna(sequence)
+    if not forbidden_sites:
+        return sequence
+    if not contains_forbidden_site(sequence, forbidden_sites):
+        return sequence
+
+    adaptiveness = {
+        (index, item["codon"]): item["relative_adaptiveness"]
+        for index, candidates in enumerate(allowed_codons)
+        for item in candidates
+    }
+    codons = [sequence[i : i + 3] for i in range(0, len(sequence), 3)]
+    for _ in range(max_passes):
+        hits = contains_forbidden_site("".join(codons), forbidden_sites)
+        if not hits:
+            return "".join(codons)
+        repaired = False
+        for hit in hits:
+            site_len = len(str(hit["site"]))
+            for index in _codon_indices_for_span(
+                int(hit["start_0based"]), site_len, len(codons)
+            ):
+                current = codons[index]
+                alternatives = sorted(
+                    (
+                        item["codon"]
+                        for item in allowed_codons[index]
+                        if item["codon"] != current
+                    ),
+                    key=lambda codon: adaptiveness.get((index, codon), 0.0),
+                    reverse=True,
+                )
+                for alt in alternatives:
+                    trial = list(codons)
+                    trial[index] = alt
+                    if len(contains_forbidden_site("".join(trial), forbidden_sites)) < len(
+                        hits
+                    ):
+                        codons = trial
+                        repaired = True
+                        break
+                if repaired:
+                    break
+            if repaired:
+                break
+        if not repaired:
+            return None
+    return None
+
+
+def initial_sequence_without_forbidden_sites(
+    allowed_codons: Sequence[Sequence[dict]],
+    forbidden_sites: Mapping[str, str],
+    *,
+    random_tries: int = 40,
+) -> str:
+    """Greedy encode, then recode around blacklist hits; sample if needed."""
+    seed = greedy_coding_sequence(allowed_codons)
+    repaired = repair_forbidden_sites(seed, allowed_codons, forbidden_sites)
+    if repaired is not None:
+        return repaired
+    for _ in range(random_tries):
+        candidate = weighted_initial_sequence(allowed_codons)
+        repaired = repair_forbidden_sites(
+            candidate, allowed_codons, forbidden_sites
+        )
+        if repaired is not None:
+            return repaired
+    hits = contains_forbidden_site(seed, forbidden_sites)
+    detail = format_forbidden_hits(hits) or "unknown site"
+    raise RuntimeError(
+        "No synonymous CDS avoids the cut-site blacklist "
+        f"({detail}). The coding mask may lock a forbidden site."
+    )
+
+
 def optimize_coding_sequence(
     aa_sequence: str,
     coding_mask: str,
@@ -202,15 +299,10 @@ def optimize_coding_sequence(
     if iterations is None:
         iterations = config["optimizer"]["iterations_per_part"]
 
-    # iterations <= 0 → greedy only (used during Pareto search)
-    if iterations <= 0:
-        sequence = greedy_coding_sequence(allowed_codons)
-        score = sequence_objective(
-            sequence, aa_sequence, codon_data, config, external_kmers=external_kmers
-        )
-        return sequence, score
-
-    current_sequence = greedy_coding_sequence(allowed_codons)
+    forbidden_sites = dict(config.get("forbidden_sites") or {})
+    current_sequence = initial_sequence_without_forbidden_sites(
+        allowed_codons, forbidden_sites
+    )
     current_codons = [
         current_sequence[i : i + 3] for i in range(0, len(current_sequence), 3)
     ]
@@ -218,25 +310,9 @@ def optimize_coding_sequence(
         current_sequence, aa_sequence, codon_data, config, external_kmers=external_kmers
     )
 
-    for _ in range(30):
-        if current_score > -1e11:
-            break
-        current_sequence = weighted_initial_sequence(allowed_codons)
-        current_codons = [
-            current_sequence[i : i + 3] for i in range(0, len(current_sequence), 3)
-        ]
-        current_score = sequence_objective(
-            current_sequence,
-            aa_sequence,
-            codon_data,
-            config,
-            external_kmers=external_kmers,
-        )
-    else:
-        raise RuntimeError(
-            "No initial sequence without forbidden sites found. "
-            "The coding mask may be too restrictive."
-        )
+    # iterations <= 0 → greedy / repaired only (used during Pareto search)
+    if iterations <= 0:
+        return current_sequence, current_score
 
     best_sequence = current_sequence
     best_score = current_score
@@ -336,26 +412,62 @@ def synthesis_qc(
     gc = gc_fraction(sequence)
     homopolymer = longest_homopolymer(sequence)
     repeat_penalty = repeated_kmer_penalty(sequence, synthesis["repeat_k"])
-    forbidden_hits = contains_forbidden_site(scan, config["forbidden_sites"])
+    forbidden_sites = dict(config.get("forbidden_sites") or {})
+    forbidden_hits = contains_forbidden_site(scan, forbidden_sites)
+    local_windows = gc_window_violations(
+        sequence,
+        synthesis["window_size"],
+        synthesis["window_gc_min"],
+        synthesis["window_gc_max"],
+    )
     local_penalty = local_gc_penalty(
         sequence,
         synthesis["window_size"],
         synthesis["window_gc_min"],
         synthesis["window_gc_max"],
     )
+    over_homopolymers = [
+        run
+        for run in notable_homopolymers(sequence, synthesis["max_homopolymer"])
+        if run["length"] > synthesis["max_homopolymer"]
+    ]
+    homopolymer_detail = format_homopolymer_runs(
+        notable_homopolymers(sequence, synthesis["max_homopolymer"])
+    )
+    repeat_hits = repeated_kmer_hits(sequence, synthesis["repeat_k"])
+    forbidden_detail = format_forbidden_hits(forbidden_hits)
+    local_gc_detail = format_gc_windows(local_windows)
+    gc_min = float(synthesis["global_gc_min"])
+    gc_max = float(synthesis["global_gc_max"])
+    if gc > gc_max:
+        gc_status = f"HIGH {format_pct(gc)} (max {format_pct(gc_max)})"
+    elif gc < gc_min:
+        gc_status = f"LOW {format_pct(gc)} (min {format_pct(gc_min)})"
+    else:
+        gc_status = f"OK {format_pct(gc)}"
 
     warnings = []
     failures = []
-    if not (synthesis["global_gc_min"] <= gc <= synthesis["global_gc_max"]):
-        warnings.append("Global GC outside target range")
-    if local_penalty > 0:
-        warnings.append("Local GC outside target range")
-    if homopolymer > synthesis["max_homopolymer"]:
-        warnings.append("Homopolymer too long")
+    if gc > gc_max:
+        warnings.append(f"Global GC {gc_status}")
+    elif gc < gc_min:
+        warnings.append(f"Global GC {gc_status}")
+    if local_windows:
+        warnings.append(f"Local GC outside target range: {local_gc_detail}")
+    if over_homopolymers:
+        warnings.append(
+            f"Homopolymer too long: {format_homopolymer_runs(over_homopolymers)}"
+        )
     if repeat_penalty > synthesis["max_repeat_count"]:
-        warnings.append("Elevated internal DNA repeats")
+        detail = format_repeat_hits(repeat_hits)
+        warnings.append(
+            f"Elevated internal DNA repeats: {detail}" if detail
+            else "Elevated internal DNA repeats"
+        )
     if forbidden_hits:
-        failures.append("Forbidden restriction site in CDS")
+        failures.append(
+            f"Forbidden restriction site in CDS: {forbidden_detail}"
+        )
 
     if sequence_kind == "oligo":
         minimum = synthesis.get("min_oligo_length")
@@ -382,6 +494,7 @@ def synthesis_qc(
         failures.append(
             "Homopolymer exceeds vendor hard maximum "
             f"({hard_max_homopolymer} nt)"
+            + (f": {homopolymer_detail}" if homopolymer_detail else "")
         )
 
     # Preserve order while avoiding duplicate diagnostics.
@@ -403,10 +516,19 @@ def synthesis_qc(
     return {
         "length": len(sequence),
         "gc_fraction": gc,
+        "gc_pct": round(gc * 100, 1),
+        "gc_status": gc_status,
         "longest_homopolymer": homopolymer,
+        "homopolymer_detail": homopolymer_detail,
+        "homopolymer_count": len(over_homopolymers),
         "repeat_penalty": repeat_penalty,
+        "repeat_detail": format_repeat_hits(repeat_hits),
         "local_gc_penalty": local_penalty,
+        "local_gc_detail": local_gc_detail,
         "forbidden_hits": json.dumps(forbidden_hits),
+        "forbidden_detail": forbidden_detail,
+        "blacklist_tested": ", ".join(forbidden_sites) or "none",
+        "blacklist_hits": forbidden_detail or "none",
         "warnings": "; ".join(warnings),
         "failures": "; ".join(failures),
         "warning_count": len(warnings),
@@ -497,10 +619,22 @@ def optimize_library(
                 "genetic_code": int(config["genetic_code"]),
                 "mask_verified": mask_matches(sequence, coding_mask),
                 "cds_gc": cds_qc["gc_fraction"],
+                "cds_gc_pct": cds_qc["gc_pct"],
+                "cds_gc_status": cds_qc["gc_status"],
                 "cds_longest_homopolymer": cds_qc["longest_homopolymer"],
+                "cds_homopolymers": cds_qc["homopolymer_detail"],
+                "cds_local_gc": cds_qc["local_gc_detail"],
                 "cds_repeat_penalty": cds_qc["repeat_penalty"],
+                "cds_repeats": cds_qc["repeat_detail"],
+                "cds_warnings": cds_qc["warnings"],
+                "cds_failures": cds_qc["failures"],
+                "blacklist_tested": cds_qc["blacklist_tested"],
+                "blacklist_hits": cds_qc["blacklist_hits"],
                 "oligo_length": oligo_qc["length"],
                 "oligo_gc": oligo_qc["gc_fraction"],
+                "oligo_gc_pct": oligo_qc["gc_pct"],
+                "oligo_gc_status": oligo_qc["gc_status"],
+                "oligo_homopolymers": oligo_qc["homopolymer_detail"],
                 "oligo_warnings": oligo_qc["warnings"],
                 "oligo_failures": oligo_qc["failures"],
                 "qc_status": (

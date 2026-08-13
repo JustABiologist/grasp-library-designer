@@ -653,6 +653,48 @@ def ensure_grasp_imported(
     return import_grasp_profile(profile_genbank_dir, input_dir)
 
 
+QC_SHEET_COLUMNS = (
+    "optimized_part_id",
+    "assembly_role",
+    "qc_status",
+    "qc_passed",
+    "translation_verified",
+    "mask_verified",
+    "codon_score",
+    "cds_gc_pct",
+    "cds_gc_status",
+    "cds_local_gc",
+    "cds_longest_homopolymer",
+    "cds_homopolymers",
+    "cds_repeats",
+    "blacklist_tested",
+    "blacklist_hits",
+    "cds_warnings",
+    "cds_failures",
+    "oligo_length",
+    "oligo_gc_pct",
+    "oligo_gc_status",
+    "oligo_homopolymers",
+    "oligo_warnings",
+    "oligo_failures",
+    "selected_overhangs",
+)
+
+
+def qc_report_frame(library: pd.DataFrame) -> pd.DataFrame:
+    """Narrow the library table to the Excel QC columns that exist."""
+    columns = [name for name in QC_SHEET_COLUMNS if name in library.columns]
+    if not columns:
+        return pd.DataFrame()
+    return library.loc[:, columns].copy()
+
+
+def write_qc_sheet(writer: pd.ExcelWriter, library: pd.DataFrame) -> None:
+    frame = qc_report_frame(library)
+    if not frame.empty:
+        frame.to_excel(writer, sheet_name="QC", index=False)
+
+
 def export_optimized_library(
     library: pd.DataFrame,
     output_dir: Path,
@@ -680,32 +722,9 @@ def export_optimized_library(
     write_oligo_fasta(out, fasta_path)
     write_annotated_genbank(out, gb_path, config=config)
 
-    qc_cols = [
-        c
-        for c in [
-            "optimized_part_id",
-            "assembly_role",
-            "joins_upstream_role",
-            "joins_downstream_role",
-            "ppr_5th_aa",
-            "ppr_last_aa",
-            "target_rna_base",
-            "translation_verified",
-            "mask_verified",
-            "codon_score",
-            "cds_gc",
-            "cds_repeat_penalty",
-            "oligo_warnings",
-            "oligo_failures",
-            "qc_passed",
-            "selected_overhangs",
-        ]
-        if c in out.columns
-    ]
     with pd.ExcelWriter(xlsx_path) as writer:
         out.to_excel(writer, sheet_name="oligos", index=False)
-        if qc_cols:
-            out[qc_cols].to_excel(writer, sheet_name="QC", index=False)
+        write_qc_sheet(writer, out)
 
     return {"csv": csv_path, "fasta": fasta_path, "xlsx": xlsx_path, "genbank": gb_path}
 
