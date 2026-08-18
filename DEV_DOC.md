@@ -17,8 +17,11 @@ Two design paths share one library:
 
 | Path | Entry point | What it produces |
 |---|---|---|
-| **One-shot** | `run_oneshot_design()` / `grasp_oneshot_designer.ipynb` | One target RNA → GRASP modules → BsaI Level −1 order fragments → BpiI Level 0 blocks |
+| **One-shot** | `run_oneshot_design()` / `grasp_oneshot_designer.ipynb` | One target RNA → binder protein → joint Golden Gate oligos (cuts + overhangs + sequence) |
 | **Library** | `run_library_redesign_and_anneal()` / `grasp_library_designer.ipynb` | Redesign / anneal the 42-module combinatorial library, then GAP-compile a target |
+
+One-shot does not use library modules or ARELF. Cut sites, 4-nt overhangs, and
+the synonymous CDS are co-designed; destination sticky ends are cloning adapters.
 
 Hard constraints on the library path: protein sequence is fixed; movable
 four-base cuts stay inside the invariant `ARELF` motif (offsets 0–11).
@@ -85,9 +88,9 @@ import_grasp.import_grasp_profile()     → parts.csv, parts_full.csv,
 build_default_config() + Colab forms    → nested dict CONFIG
         │
         ├─ one-shot ─► run_oneshot_design()
-        │                 compile_target_gap → pick modules
-        │                 optimize_library (masked codon SA)
-        │                 build_order_fragment + in-silico checks
+        │                 rna_to_binder_aa
+        │                 co_design_gene_assembly (cuts + overhangs + CDS)
+        │                 Type IIS oligos + in-silico stitch
         │
         └─ library ──► run_library_redesign_and_anneal()
                           run_overhang_redesign (Pareto, optional)
@@ -131,14 +134,14 @@ touch.
 | `binder.py` | Target RNA (length 9 / 14 / 19) → PPR recognition code → binder amino acids. No library parts required. |
 | `import_grasp.py` * | Parse deposited GenBank, build parts tables, GAP `compile_target_gap` / `pick_parts_for_target`, pAGM1311 order-fragment arms. Runnable as `python -m grasp_library.import_grasp`. ~955 lines. |
 | `arelf.py` * | Invariant `ARELF` motif, offsets 0–11, candidate `(overhang, offset)` pairs, `materialize_arelf_parts()`. |
-| `gga_split.py` | Legacy / generic Golden Gate split of an optimized CDS. One-shot no longer uses configurable fragment counts. |
+| `gga_split.py` * | Joint Golden Gate gene split: cut sites, overhangs, and sequence. Used by one-shot. |
 
 ### 4.3 Domain: cloning geometry
 
 | File | Role |
 |---|---|
 | `assembly_interfaces.py` * | Presets (`deposited_grasp`, `custom`), physical 5′/3′ overhangs vs assembled coding sites, `build_order_fragment` / `extract_order_payload`. Has its own `reverse_complement` (duplicate of `dna.py`). |
-| `oneshot.py` * | `run_oneshot_design()`, in-silico order-fragment + PPR block-chain checks. Does not claim whole-vector or wet-lab validation. |
+| `oneshot.py` * | `run_oneshot_design()`: RNA → binder → co-designed oligos. Also keeps pAGM1311 order-fragment validators for the library path. |
 | `dna.py` | Clean DNA/mask, RC, GC, homopolymer, k-mer penalties, forbidden sites, mask overlay. |
 | `restriction_sites.py` | ~100-enzyme cut-site blacklist (default SapI / BsaI / BpiI) merged into `forbidden_sites`. |
 
@@ -193,7 +196,7 @@ after `pip install -e ".[dev]"`.
 
 | File | What it locks in |
 |---|---|
-| `test_oneshot.py` | Deposited parts reconstruct valid pAGM1311 fragments; 9S / 14S / 19S export requirements |
+| `test_oneshot.py` | pAGM1311 validators; one-shot oligos assemble into 9S / 14S / 19S binder genes |
 | `test_strand_semantics.py` | Physical sticky end vs coding site; directional terminal pairs |
 | `test_assembly_interfaces.py` | Preset geometry, validation, order-fragment arms |
 | `test_dashboard_interfaces.py` | Forms + widgets write the same overhang fields |
@@ -229,7 +232,7 @@ package, falling back to `third_party/` in a raw checkout.
 
 `grasp_oneshot_designer.ipynb` and `grasp_library_designer.ipynb` are what
 the README Colab badges open. Cell **0 · Install** currently pins PyPI
-(`grasp-library-designer>=0.1.13`) and purges stale `grasp_library` modules
+(`grasp-library-designer>=0.1.14`) and purges stale `grasp_library` modules
 from `sys.modules`. Keep that purge if you change the install cell.
 
 ---

@@ -192,62 +192,129 @@ def _codon_indices_for_span(start: int, length: int, n_codons: int) -> List[int]
     return [index for index in range(start // 3, last + 1) if 0 <= index < n_codons]
 
 
+def _repair_one_site(
+    codons: List[str],
+    hits: Sequence[dict],
+    tier_codons: Sequence[Sequence[dict]],
+    adaptiveness: Mapping[tuple, float],
+    forbidden_sites: Mapping[str, str],
+):
+    """Try one single-codon swap from ``tier_codons`` that removes a hit."""
+    for hit in hits:
+        site_len = len(str(hit["site"]))
+        for index in _codon_indices_for_span(
+            int(hit["start_0based"]), site_len, len(codons)
+        ):
+            if index >= len(tier_codons):
+                continue
+            current = codons[index]
+            alternatives = sorted(
+                (
+                    item["codon"]
+                    for item in tier_codons[index]
+                    if item["codon"] != current
+                ),
+                key=lambda codon: adaptiveness.get((index, codon), 0.0),
+                reverse=True,
+            )
+            for alt in alternatives:
+                trial = list(codons)
+                trial[index] = alt
+                if len(contains_forbidden_site("".join(trial), forbidden_sites)) < len(
+                    hits
+                ):
+                    return trial, index, current, alt, hit
+    return None
+
+
 def repair_forbidden_sites(
     sequence: str,
     allowed_codons: Sequence[Sequence[dict]],
     forbidden_sites: Mapping[str, str],
     *,
     max_passes: int = 80,
+    rescue_codons: Optional[Sequence[Sequence[dict]]] = None,
+    rescue_log: Optional[List[dict]] = None,
 ) -> Optional[str]:
-    """Recode overlapping synonymous codons until blacklist sites are gone."""
+    """Recode overlapping synonymous codons until blacklist sites are gone.
+
+    Codons from ``allowed_codons`` are always tried first. ``rescue_codons``
+    (normally the unfiltered synonymous set) is consulted only when no
+    frequency-preferred swap can clear a site, so a codon below the configured
+    ``minimum_relative_adaptiveness`` is introduced only where the coding mask
+    and the cut-site blacklist together leave no alternative. Each such swap is
+    appended to ``rescue_log``.
+    """
     sequence = clean_dna(sequence)
     if not forbidden_sites:
         return sequence
     if not contains_forbidden_site(sequence, forbidden_sites):
         return sequence
 
+    tiers = [allowed_codons]
+    if rescue_codons is not None:
+        tiers.append(rescue_codons)
     adaptiveness = {
         (index, item["codon"]): item["relative_adaptiveness"]
+        for tier in tiers
+        for index, candidates in enumerate(tier)
+        for item in candidates
+    }
+    preferred = {
+        (index, item["codon"])
         for index, candidates in enumerate(allowed_codons)
         for item in candidates
     }
+    notes: List[dict] = []
     codons = [sequence[i : i + 3] for i in range(0, len(sequence), 3)]
     for _ in range(max_passes):
         hits = contains_forbidden_site("".join(codons), forbidden_sites)
         if not hits:
+            if rescue_log is not None:
+                rescue_log.extend(notes)
             return "".join(codons)
-        repaired = False
-        for hit in hits:
-            site_len = len(str(hit["site"]))
-            for index in _codon_indices_for_span(
-                int(hit["start_0based"]), site_len, len(codons)
-            ):
-                current = codons[index]
-                alternatives = sorted(
-                    (
-                        item["codon"]
-                        for item in allowed_codons[index]
-                        if item["codon"] != current
-                    ),
-                    key=lambda codon: adaptiveness.get((index, codon), 0.0),
-                    reverse=True,
-                )
-                for alt in alternatives:
-                    trial = list(codons)
-                    trial[index] = alt
-                    if len(contains_forbidden_site("".join(trial), forbidden_sites)) < len(
-                        hits
-                    ):
-                        codons = trial
-                        repaired = True
-                        break
-                if repaired:
-                    break
-            if repaired:
+        applied = None
+        for tier in tiers:
+            applied = _repair_one_site(
+                codons, hits, tier, adaptiveness, forbidden_sites
+            )
+            if applied is not None:
                 break
-        if not repaired:
+        if applied is None:
             return None
+        codons, index, old_codon, new_codon, hit = applied
+        if (index, new_codon) not in preferred:
+            notes.append(
+                {
+                    "codon_index": index,
+                    "codon_position": index + 1,
+                    "from_codon": old_codon,
+                    "to_codon": new_codon,
+                    "relative_adaptiveness": float(
+                        adaptiveness.get((index, new_codon), 0.0)
+                    ),
+                    "enzyme": str(hit["enzyme"]),
+                    "site": str(hit["site"]),
+                    "site_position": int(hit["start_0based"]) + 1,
+                }
+            )
     return None
+
+
+def format_rescue_codons(notes: Sequence[Mapping]) -> str:
+    """Human-readable summary of below-threshold codons and why they were used."""
+    return "; ".join(
+        f"{note.get('amino_acid', '?')}{note['codon_position']} "
+        f"{note['from_codon']}→{note['to_codon']} "
+        f"(relative adaptiveness {float(note['relative_adaptiveness']):.3f}"
+        + (
+            f" < {float(note['minimum_relative_adaptiveness']):.2f}"
+            if note.get("minimum_relative_adaptiveness") is not None
+            else ""
+        )
+        + f") to deplete {note['enzyme']} {note['site']}@{note['site_position']}"
+        for note in notes
+    )
 
 
 def initial_sequence_without_forbidden_sites(
@@ -255,8 +322,17 @@ def initial_sequence_without_forbidden_sites(
     forbidden_sites: Mapping[str, str],
     *,
     random_tries: int = 40,
+    rescue_codons: Optional[Sequence[Sequence[dict]]] = None,
+    rescue_log: Optional[List[dict]] = None,
 ) -> str:
-    """Greedy encode, then recode around blacklist hits; sample if needed."""
+    """Greedy encode, then recode around blacklist hits; sample if needed.
+
+    Frequency-preferred codons are exhausted first (greedy seed, then random
+    restarts). Only if none of those clears the blacklist does the search fall
+    back to ``rescue_codons``, because a hard cut-site constraint outranks the
+    soft ``minimum_relative_adaptiveness`` preference. Sequences that already
+    succeed are unaffected.
+    """
     seed = greedy_coding_sequence(allowed_codons)
     repaired = repair_forbidden_sites(seed, allowed_codons, forbidden_sites)
     if repaired is not None:
@@ -268,12 +344,68 @@ def initial_sequence_without_forbidden_sites(
         )
         if repaired is not None:
             return repaired
+
+    if rescue_codons is not None:
+        notes: List[dict] = []
+        repaired = repair_forbidden_sites(
+            seed,
+            allowed_codons,
+            forbidden_sites,
+            rescue_codons=rescue_codons,
+            rescue_log=notes,
+        )
+        if repaired is None:
+            for _ in range(random_tries):
+                notes = []
+                candidate = weighted_initial_sequence(allowed_codons)
+                repaired = repair_forbidden_sites(
+                    candidate,
+                    allowed_codons,
+                    forbidden_sites,
+                    rescue_codons=rescue_codons,
+                    rescue_log=notes,
+                )
+                if repaired is not None:
+                    break
+        if repaired is not None:
+            if rescue_log is not None:
+                rescue_log.extend(notes)
+            return repaired
+
     hits = contains_forbidden_site(seed, forbidden_sites)
     detail = format_forbidden_hits(hits) or "unknown site"
+    locked = sorted(
+        {
+            index + 1
+            for hit in hits
+            for index in _codon_indices_for_span(
+                int(hit["start_0based"]), len(str(hit["site"])), len(allowed_codons)
+            )
+            if len(allowed_codons[index]) == 1
+        }
+    )
     raise RuntimeError(
         "No synonymous CDS avoids the cut-site blacklist "
-        f"({detail}). The coding mask may lock a forbidden site."
+        f"({detail}), even after allowing codons below the configured "
+        "minimum_relative_adaptiveness. Every codon overlapping the site is "
+        "fixed by the coding mask"
+        + (f" (codon positions {locked})" if locked else "")
+        + ". Move the junction overhang or drop the enzyme from the blacklist."
     )
+
+
+def below_threshold_codons(
+    sequence: str,
+    allowed_codons: Sequence[Sequence[dict]],
+) -> List[int]:
+    """Codon indices whose codon is not in the frequency-preferred set."""
+    sequence = clean_dna(sequence)
+    preferred = [{item["codon"] for item in candidates} for candidates in allowed_codons]
+    return [
+        index
+        for index in range(len(preferred))
+        if sequence[3 * index : 3 * index + 3] not in preferred[index]
+    ]
 
 
 def optimize_coding_sequence(
@@ -283,6 +415,7 @@ def optimize_coding_sequence(
     config: Mapping,
     external_kmers: Optional[Counter] = None,
     iterations: Optional[int] = None,
+    rescue_log: Optional[List[dict]] = None,
 ):
     aa_sequence = str(aa_sequence).upper().replace(" ", "")
     coding_mask = clean_mask(coding_mask)
@@ -295,14 +428,53 @@ def optimize_coding_sequence(
         codon_data,
         minimum_relative_adaptiveness=minimum_adaptiveness,
     )
+    # Escape hatch for the site-repair pass only: a hard cut-site constraint
+    # outranks the soft codon-frequency floor. The annealer below still
+    # explores allowed_codons.
+    rescue_codons = build_allowed_codons(
+        aa_sequence,
+        coding_mask,
+        codon_data,
+        minimum_relative_adaptiveness=0.0,
+    )
 
     if iterations is None:
         iterations = config["optimizer"]["iterations_per_part"]
 
     forbidden_sites = dict(config.get("forbidden_sites") or {})
+    rescue_notes: List[dict] = []
     current_sequence = initial_sequence_without_forbidden_sites(
-        allowed_codons, forbidden_sites
+        allowed_codons,
+        forbidden_sites,
+        rescue_codons=rescue_codons,
+        rescue_log=rescue_notes,
     )
+    for note in rescue_notes:
+        index = int(note["codon_index"])
+        note["amino_acid"] = (
+            aa_sequence[index] if 0 <= index < len(aa_sequence) else "?"
+        )
+        note["minimum_relative_adaptiveness"] = float(minimum_adaptiveness)
+    if rescue_log is not None:
+        rescue_log.extend(rescue_notes)
+
+    rescued_positions = {int(note["codon_index"]) for note in rescue_notes}
+
+    def _assert_rescue_scope(sequence: str) -> None:
+        """Only the logged codons may sit below the frequency floor."""
+        unexpected = set(below_threshold_codons(sequence, allowed_codons)) - (
+            rescued_positions
+        )
+        if unexpected:
+            raise AssertionError(
+                "Codons below minimum_relative_adaptiveness "
+                f"({minimum_adaptiveness}) outside the cut-site repair: "
+                f"positions {sorted(index + 1 for index in unexpected)}. "
+                "The frequency floor may only be relaxed at codons that "
+                "deplete a blacklisted site."
+            )
+
+    _assert_rescue_scope(current_sequence)
     current_codons = [
         current_sequence[i : i + 3] for i in range(0, len(current_sequence), 3)
     ]
@@ -376,6 +548,7 @@ def optimize_coding_sequence(
         )
     if not mask_matches(best_sequence, coding_mask):
         raise AssertionError("Optimized sequence violates the coding mask.")
+    _assert_rescue_scope(best_sequence)
 
     return best_sequence, best_score
 
@@ -386,6 +559,7 @@ def synthesis_qc(
     *,
     forbidden_scan: Optional[str] = None,
     sequence_kind: str = "generic",
+    rescue_notes: Sequence[Mapping] = (),
 ):
     """QC a DNA string with explicit clean/warning/failure semantics.
 
@@ -394,6 +568,11 @@ def synthesis_qc(
     only warnings. Length limits are checked only when ``sequence_kind`` is
     ``"oligo"`` or ``"gene"``; this avoids applying gene-product limits to an
     individual GRASP module CDS.
+
+    ``rescue_notes`` carries codons that the site-repair pass had to take below
+    the configured ``minimum_relative_adaptiveness``; each one is reported as a
+    warning with the enzyme site it removed, so a rare codon never enters an
+    order silently.
 
     This is a transparent heuristic, not confirmation that a synthesis vendor
     will accept an order. Non-machine-checkable vendor rules are returned for
@@ -468,6 +647,24 @@ def synthesis_qc(
         failures.append(
             f"Forbidden restriction site in CDS: {forbidden_detail}"
         )
+    rescue_notes = list(rescue_notes or ())
+    rescue_detail = format_rescue_codons(rescue_notes)
+    rescue_reason = ""
+    if rescue_notes:
+        rescue_enzymes = ", ".join(
+            dict.fromkeys(str(note["enzyme"]) for note in rescue_notes)
+        )
+        rescue_reason = (
+            "The coding mask fixes every other codon overlapping the site "
+            f"(junction overhang), so no codon at or above the configured "
+            f"minimum relative adaptiveness could deplete {rescue_enzymes}. "
+            "The highest-frequency codon that removes the site was used "
+            "instead; the protein sequence is unchanged."
+        )
+        warnings.append(
+            f"Low relative-adaptiveness codon used to deplete {rescue_enzymes}: "
+            f"{rescue_detail}. {rescue_reason}"
+        )
 
     if sequence_kind == "oligo":
         minimum = synthesis.get("min_oligo_length")
@@ -529,6 +726,9 @@ def synthesis_qc(
         "forbidden_detail": forbidden_detail,
         "blacklist_tested": ", ".join(forbidden_sites) or "none",
         "blacklist_hits": forbidden_detail or "none",
+        "rescue_codon_count": len(rescue_notes),
+        "rescue_codon_detail": rescue_detail,
+        "rescue_codon_reason": rescue_reason,
         "warnings": "; ".join(warnings),
         "failures": "; ".join(failures),
         "warning_count": len(warnings),
@@ -551,6 +751,7 @@ def optimize_library(
     """Anneal every part; return oligo table."""
     results = []
     library_kmers: Counter = Counter()
+    rescue_summary: List[tuple] = []
     number_of_versions = config["optimizer"]["orthogonal_versions_per_part"]
     repeat_k = config["synthesis"]["repeat_k"]
     parts = parts.reset_index(drop=True)
@@ -562,13 +763,26 @@ def optimize_library(
 
         part_versions = []
         for version in range(1, number_of_versions + 1):
+            rescue_notes: List[dict] = []
             sequence, objective = optimize_coding_sequence(
                 aa_sequence=aa_sequence,
                 coding_mask=coding_mask,
                 codon_data=codon_data,
                 config=config,
                 external_kmers=library_kmers,
+                rescue_log=rescue_notes,
             )
+            if rescue_notes:
+                enzymes = ", ".join(
+                    dict.fromkeys(str(note["enzyme"]) for note in rescue_notes)
+                )
+                log(
+                    f"  Note: {len(rescue_notes)} low relative-adaptiveness "
+                    f"codon(s) chosen to deplete {enzymes} in "
+                    f"{row['part_id']} v{version}: "
+                    f"{format_rescue_codons(rescue_notes)}"
+                )
+                rescue_summary.append((f"{row['part_id']}_v{version}", rescue_notes))
             if {"oh5_mask_start", "oh3_mask_start"} <= set(parts.columns):
                 from .assembly_interfaces import order_fragment_arms, resolve_assembly_interfaces
                 from .import_grasp import build_configured_order_fragment
@@ -593,6 +807,7 @@ def optimize_library(
                 config,
                 forbidden_scan=sequence,
                 sequence_kind="oligo",
+                rescue_notes=rescue_notes,
             )
             translation = verify_cds_for_organism(
                 sequence,
@@ -630,6 +845,9 @@ def optimize_library(
                 "cds_failures": cds_qc["failures"],
                 "blacklist_tested": cds_qc["blacklist_tested"],
                 "blacklist_hits": cds_qc["blacklist_hits"],
+                "rescue_codon_count": oligo_qc["rescue_codon_count"],
+                "rescue_codon_detail": oligo_qc["rescue_codon_detail"],
+                "rescue_codon_reason": oligo_qc["rescue_codon_reason"],
                 "oligo_length": oligo_qc["length"],
                 "oligo_gc": oligo_qc["gc_fraction"],
                 "oligo_gc_pct": oligo_qc["gc_pct"],
@@ -680,6 +898,26 @@ def optimize_library(
         sequences = [item["optimized_cds"] for item in part_versions]
         if len(set(sequences)) != len(sequences):
             log(f"  Warning: not all versions for {row['part_id']} were DNA-distinct.")
+
+    if rescue_summary:
+        total = sum(len(notes) for _, notes in rescue_summary)
+        enzymes = ", ".join(
+            dict.fromkeys(
+                str(note["enzyme"]) for _, notes in rescue_summary for note in notes
+            )
+        )
+        log(
+            f"\nOptimization complete: {total} codon(s) across "
+            f"{len(rescue_summary)} module(s) were taken below the configured "
+            f"minimum relative adaptiveness "
+            f"({config['codon_optimization']['minimum_relative_adaptiveness']:.2f}) "
+            f"to deplete {enzymes}. The coding mask left no higher-frequency "
+            "synonymous codon at those positions; protein sequences are "
+            "unchanged. Flagged as WARNING in the oligo QC "
+            "(rescue_codon_detail / rescue_codon_reason):"
+        )
+        for label, notes in rescue_summary:
+            log(f"  {label}: {format_rescue_codons(notes)}")
 
     from .binder import annotate_module_roles
 

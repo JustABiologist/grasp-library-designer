@@ -12,7 +12,7 @@ Click a badge → run **0 · Install** (PyPI) → fill the forms top to bottom. 
 
 | Notebook | Open |
 |---|---|
-| **One-shot** (one RNA → configured Level −1 order fragments) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/JustABiologist/grasp-library-designer/blob/main/grasp_oneshot_designer.ipynb) |
+| **One-shot** (one RNA → Golden Gate oligos for the binder gene) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/JustABiologist/grasp-library-designer/blob/main/grasp_oneshot_designer.ipynb) |
 | **Library** (42-module redesign → GAP compile) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/JustABiologist/grasp-library-designer/blob/main/grasp_library_designer.ipynb) |
 
 Direct links:
@@ -23,7 +23,7 @@ Direct links:
 Each notebook installs with:
 
 ```python
-%pip install -q -U "grasp-library-designer>=0.1.13"
+%pip install -q -U "grasp-library-designer>=0.1.14"
 ```
 
 Bundled GenBank modules, Potapov ligase-only matrices, and Pryor Golden Gate
@@ -62,8 +62,13 @@ write_notebook("oneshot")   # or "library"
 
 | Notebook | Purpose |
 |---|---|
-| [`grasp_oneshot_designer.ipynb`](grasp_oneshot_designer.ipynb) | One target RNA → target-specific GRASP modules → BsaI order fragments for the configured Level −1 entry vector → BpiI Level 0 blocks |
+| [`grasp_oneshot_designer.ipynb`](grasp_oneshot_designer.ipynb) | One target RNA → binder protein → joint Golden Gate gene design (cuts, overhangs, sequence) → orderable oligos |
 | [`grasp_library_designer.ipynb`](grasp_library_designer.ipynb) | Redesign / anneal the 42-module combinatorial library, then GAP-compile a target |
+
+One-shot does **not** emit combinatorial library modules. It co-designs codon-aligned
+cut sites, high-fidelity 4-nt overhangs, and a synonymous CDS (codon optimality,
+cut-site depletion, synthesis heuristics), then wraps each fragment with inward-facing
+Type IIS arms and destination sticky ends.
 
 Hard constraints (library path): the protein sequence is fixed and every movable
 four-base cut is restricted to the invariant `ARELF` motif. The search explores

@@ -6,6 +6,8 @@ import pytest
 
 from grasp_library.codon_tables import load_codon_usage
 from grasp_library.control_panel import build_default_config
+from grasp_library.dna import reverse_complement, translate_dna
+from grasp_library.gga_split import assemble_payloads_to_cds
 from grasp_library.import_grasp import build_pagm1311_order_fragment, import_grasp_profile
 from grasp_library.oneshot import run_oneshot_design, validate_pagm1311_order_fragment
 from grasp_library.paths import bundled_profile_genbank
@@ -69,79 +71,66 @@ def test_all_42_deposited_parts_reconstruct_valid_entry_fragments(inputs):
         assert result["bpii_release_oh3"] == expected_oh3
 
 
-@pytest.mark.parametrize(
-    ("target", "architecture", "interfaces"),
-    [
-        ("UUACACGUG", "9S", "AGGT;CTTC;TTCG"),
-        ("A" * 14, "14S", "AGGT;GTGA;CTTC;TTCG"),
-        ("G" * 19, "19S", "AGGT;GTGA;CACG;CTTC;TTCG"),
-    ],
-)
-def test_oneshot_exports_standard_grasp_requirements_and_ppr_chain(
-    inputs, tmp_path, target, architecture, interfaces
-):
+@pytest.mark.parametrize("target", ["UUACACGUG", "A" * 14, "G" * 19])
+def test_oneshot_oligos_assemble_into_the_binder_gene(inputs, tmp_path, target):
     _, codon_data, config = inputs
     result = run_oneshot_design(
         target_rna=target,
         codon_data=codon_data,
         config=config,
-        output_dir=tmp_path,
+        output_dir=tmp_path / target,
         seed=42,
         log=lambda *_: None,
     )
 
-    assert result["summary"]["architecture"] == architecture
-    assert result["summary"]["entry_vector"] == "pAGM1311"
-    assert result["summary"]["level0_acceptor"] == "pAGM9121"
-    assert result["summary"]["entry_five_prime_end_overhang"] == "ACAT"
-    assert result["summary"]["entry_three_prime_end_overhang"] == "ACAA"
-    assert result["summary"]["entry_three_prime_assembled_coding_site"] == "TTGT"
-    assert result["summary"][
-        "final_cassette_five_prime_end_overhang"
-    ] == "GGAG"
-    assert result["summary"][
-        "final_cassette_three_prime_end_overhang"
-    ] == "AGCG"
+    oligos = result["oligos"]
+    design = result["design"]
+    info = result["binder"]
+    assert result["summary"]["architecture"] == f"{len(target)}S"
     assert result["summary"]["translation_verified"] is True
-    assert len(result["level0_assemblies"]) == len(interfaces.split(";")) - 1
-    assert result["level0_assemblies"][
-        "level0_module_chain_in_silico_validated"
-    ].all()
-    assert set(result["level0_assemblies"]["level0_five_prime_end_overhang"]) == {
-        "CTCA"
-    }
-    assert set(result["level0_assemblies"]["level0_three_prime_end_overhang"]) == {
-        "CTCG"
-    }
-    assert set(
-        result["level0_assemblies"][
-            "level0_three_prime_assembled_coding_site"
-        ]
-    ) == {"CGAG"}
-    assert result["ppr_block_chain"]["ppr_interface_chain"] == interfaces
-    assert result["ppr_block_chain"][
-        "ppr_block_chain_in_silico_validated"
-    ] is True
-    assert result["summary"]["entry_interface_requirements_checked"] is True
-    assert result["summary"]["entry_vector_sequence_in_silico_validated"] is False
-    assert result["summary"]["standalone_expression_cassette"] is False
-    assert result["orderable_fragments"]["order_sequence_5to3"].str.startswith(
-        "TTTGGTCTCAACAT"
-    ).all()
-    assert result["orderable_fragments"]["order_sequence_5to3"].str.endswith(
-        "TTGTTGAGACCAAA"
-    ).all()
-    assert result["orderable_fragments"]["order_sequence_5to3"].str.count(
-        "GGTCTC"
-    ).eq(1).all()
-    assert result["orderable_fragments"]["order_sequence_5to3"].str.count(
-        "GAGACC"
-    ).eq(1).all()
+    assert len(oligos) >= 2
+    assert translate_dna(result["cds"]) == info["aa_sequence"]
+    assembled = assemble_payloads_to_cds(
+        design.payloads,
+        destination_5prime=design.destination_5prime,
+        destination_3prime_coding=design.destination_3prime_coding,
+    )
+    assert assembled == result["cds"]
+    assert oligos["order_sequence_5to3"].str.contains("GGTCTC").all()
+    assert oligos["order_sequence_5to3"].str.contains("GAGACC").all()
+    assert oligos["hard_constraints_passed"].all()
+    assert 0.0 <= result["summary"]["ligation_fidelity"] <= 1.0
     assert result["order_csv"].exists()
     assert result["order_fasta"].exists()
-    assert result["order_genbank"].exists()
-    assert result["ppr_block_chain_csv"].exists()
-    assert result["binding_tract_fasta"].exists()
+    assert result["gene_fasta"].exists()
+
+
+def test_oneshot_junctions_are_synonymous_and_orthogonal(inputs, tmp_path):
+    _, codon_data, config = inputs
+    result = run_oneshot_design(
+        target_rna="UUACACGUG",
+        codon_data=codon_data,
+        config=config,
+        output_dir=tmp_path,
+        seed=7,
+        log=lambda *_: None,
+    )
+    design = result["design"]
+    used = set()
+    for cut, overhang in zip(design.cuts, design.overhangs):
+        assert design.cds[3 * cut - 4 : 3 * cut] == overhang
+        assert overhang != reverse_complement(overhang)
+        assert overhang not in used
+        assert reverse_complement(overhang) not in used
+        used.add(overhang)
+        used.add(reverse_complement(overhang))
+    dest = {
+        design.destination_5prime,
+        reverse_complement(design.destination_5prime),
+        design.destination_3prime_coding,
+        reverse_complement(design.destination_3prime_coding),
+    }
+    assert used.isdisjoint(dest)
 
 
 @pytest.mark.parametrize("target", ["A" * 9, "G" * 9, "C" * 9, "U" * 9, "ACGUACGUA"])
@@ -158,130 +147,49 @@ def test_difficult_targets_no_longer_crash_in_cut_search(inputs, tmp_path, targe
     assert result["summary"]["translation_verified"] is True
 
 
-def test_one_shot_rejects_obsolete_arbitrary_fragmentation(inputs, tmp_path):
+def test_oneshot_honors_fragment_count_and_destination_overhangs(inputs, tmp_path):
+    _, codon_data, default_config = inputs
+    config = copy.deepcopy(default_config)
+    config["oneshot"] = {
+        "n_fragments": 4,
+        "destination_5prime_overhang": "AATG",
+        "destination_3prime_overhang": "GCTT",
+        "wrap_enzyme": "BsaI",
+    }
+    result = run_oneshot_design(
+        target_rna="A" * 9,
+        codon_data=codon_data,
+        config=config,
+        output_dir=tmp_path,
+        n_fragments=4,
+        seed=3,
+        log=lambda *_: None,
+    )
+
+    assert len(result["oligos"]) == 4
+    assert result["summary"]["destination_5prime_overhang"] == "AATG"
+    assert result["summary"]["destination_3prime_overhang"] == "GCTT"
+    first = result["oligos"].iloc[0].order_sequence_5to3
+    last = result["oligos"].iloc[-1].order_sequence_5to3
+    assert first.startswith("TTTGGTCTCAAATG")
+    assert first.count("GGTCTC") == 1
+    assert last.endswith("AAGCTGAGACCAAA")
+    assert result["oligos"].iloc[0].oh5_coding_site_5to3 == "AATG"
+    assert result["oligos"].iloc[-1].oh3_coding_site_5to3 == reverse_complement("GCTT")
+
+
+def test_oneshot_n_fragments_kwarg_is_not_rejected(inputs, tmp_path):
     _, codon_data, config = inputs
-    with pytest.raises(ValueError, match="fixed five-part"):
-        run_oneshot_design(
-            target_rna="A" * 9,
-            codon_data=codon_data,
-            config=config,
-            output_dir=tmp_path,
-            n_fragments=4,
-        )
-
-
-def test_oneshot_deposited_grasp_preset_is_explicit(inputs, tmp_path):
-    _, codon_data, default_config = inputs
-    config = copy.deepcopy(default_config)
-    config["assembly_interfaces"] = "deposited_grasp"
     result = run_oneshot_design(
-        target_rna="UUACACGUG",
+        target_rna="A" * 9,
         codon_data=codon_data,
         config=config,
         output_dir=tmp_path,
-        seed=42,
+        n_fragments=4,
+        seed=1,
         log=lambda *_: None,
     )
-
-    assert result["summary"]["entry_vector"] == "pAGM1311"
-    assert result["summary"]["level0_acceptor"] == "pAGM9121"
-    assert result["summary"]["entry_vector_context_in_silico_validated"] is True
-    assert result["summary"]["entry_vector_sequence_in_silico_validated"] is False
-    assert result["orderable_fragments"]["order_sequence_5to3"].str.startswith(
-        "TTTGGTCTCAACAT"
-    ).all()
-    assert result["orderable_fragments"]["order_sequence_5to3"].str.endswith(
-        "TTGTTGAGACCAAA"
-    ).all()
-
-
-def test_oneshot_honors_configured_level0_block_interface(inputs, tmp_path):
-    _, codon_data, default_config = inputs
-    config = copy.deepcopy(default_config)
-    junction = config["assembly_interfaces"]["junctions"]["terminal_to_cds2"]
-    junction.update(
-        upstream_three_prime_end_overhang="GAAT",
-        downstream_five_prime_end_overhang="ATTC",
-        assembled_coding_site="ATTC",
-        arelf_offset_nt=11,
-    )
-    result = run_oneshot_design(
-        target_rna="UUACACGUG",
-        codon_data=codon_data,
-        config=config,
-        output_dir=tmp_path,
-        seed=42,
-        log=lambda *_: None,
-    )
-
-    assert result["ppr_block_chain"]["ppr_interface_chain"] == "AGGT;ATTC;TTCG"
-    assert result["summary"]["ppr_block_chain_in_silico_validated"] is True
-
-
-def test_oneshot_derives_coding_sites_from_all_six_configured_physical_ends(
-    inputs, tmp_path
-):
-    _, codon_data, default_config = inputs
-    config = copy.deepcopy(default_config)
-    assembly = config["assembly_interfaces"]
-    assembly["preset"] = "custom"
-    assembly["level_minus1_entry"].update(
-        profile="custom",
-        vector_name="custom_level_minus1_entry",
-        five_prime_end_overhang="AAAA",
-        three_prime_end_overhang="CCCC",
-        five_prime_assembled_coding_site="AAAA",
-        three_prime_assembled_coding_site="GGGG",
-    )
-    assembly["level0"]["acceptor_name"] = "custom_level0_acceptor"
-    assembly["level0"]["acceptor_outer"].update(
-        five_prime_end_overhang="ATGC",
-        three_prime_end_overhang="CGTA",
-        five_prime_assembled_coding_site="ATGC",
-        three_prime_assembled_coding_site="TACG",
-    )
-    assembly["level1"].update(
-        acceptor_name="custom_level1_acceptor",
-        five_prime_end_overhang="ACGT",
-        three_prime_end_overhang="TGCA",
-        five_prime_assembled_coding_site="ACGT",
-        three_prime_assembled_coding_site="TGCA",
-    )
-
-    result = run_oneshot_design(
-        target_rna="UUACACGUG",
-        codon_data=codon_data,
-        config=config,
-        output_dir=tmp_path,
-        seed=42,
-        log=lambda *_: None,
-    )
-
-    summary = result["summary"]
-    assert summary["entry_five_prime_end_overhang"] == "AAAA"
-    assert summary["entry_three_prime_end_overhang"] == "CCCC"
-    assert summary["entry_three_prime_assembled_coding_site"] == "GGGG"
-    assert summary["final_cassette_five_prime_end_overhang"] == "ACGT"
-    assert summary["final_cassette_three_prime_end_overhang"] == "TGCA"
-    assert set(result["level0_assemblies"]["level0_five_prime_end_overhang"]) == {
-        "ATGC"
-    }
-    assert set(result["level0_assemblies"]["level0_three_prime_end_overhang"]) == {
-        "CGTA"
-    }
-    assert set(
-        result["level0_assemblies"][
-            "level0_three_prime_assembled_coding_site"
-        ]
-    ) == {
-        "TACG"
-    }
-    assert result["orderable_fragments"]["order_sequence_5to3"].str.startswith(
-        "TTTGGTCTCAAAAA"
-    ).all()
-    assert result["orderable_fragments"]["order_sequence_5to3"].str.endswith(
-        "GGGGTGAGACCAAA"
-    ).all()
+    assert len(result["oligos"]) == 4
 
 
 def test_invalid_target_characters_are_not_silently_deleted():

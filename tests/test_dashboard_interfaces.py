@@ -127,13 +127,11 @@ def test_dashboard_overhang_section_has_exactly_six_plain_end_fields(tmp_path: P
     assert "BbsI-HF" in panel.ligation.value
 
 
-def test_notebook_forms_expose_the_same_six_overhang_fields():
+def test_library_notebook_forms_expose_the_six_toolbox_overhang_fields():
     root = Path(__file__).parents[1]
     notebooks = (
         root / "grasp_library_designer.ipynb",
-        root / "grasp_oneshot_designer.ipynb",
         root / "grasp_library" / "notebooks" / "grasp_library_designer.ipynb",
-        root / "grasp_library" / "notebooks" / "grasp_oneshot_designer.ipynb",
     )
     expected = {
         "level_minus1_5prime_overhang": "ACAT",
@@ -156,6 +154,36 @@ def test_notebook_forms_expose_the_same_six_overhang_fields():
             name, value = line.split("=", 1)
             observed[name.strip()] = value.split("#", 1)[0].strip().strip('"')
         assert observed == expected, path
+
+
+def test_oneshot_notebook_forms_expose_destination_overhangs():
+    root = Path(__file__).parents[1]
+    notebooks = (
+        root / "grasp_oneshot_designer.ipynb",
+        root / "grasp_library" / "notebooks" / "grasp_oneshot_designer.ipynb",
+    )
+    expected = {
+        "destination_5prime_overhang": "CTCA",
+        "destination_3prime_overhang": "CTCG",
+    }
+
+    for path in notebooks:
+        notebook = json.loads(path.read_text())
+        source = "".join(
+            "".join(cell.get("source", [])) for cell in notebook["cells"]
+        )
+        observed = {}
+        for line in source.splitlines():
+            if "#@param" not in line or "destination_" not in line or "_overhang =" not in line:
+                continue
+            name, value = line.split("=", 1)
+            observed[name.strip()] = value.split("#", 1)[0].strip().strip('"')
+        assert observed == expected, path
+        assert "level_minus1_5prime_overhang" not in source
+        assert "arelf_offset" not in source.lower()
+        assert "co-design" in source.lower() or "joint" in source.lower()
+
+
 def test_form_rejects_invalid_level_overhang(tmp_path: Path):
     cfg = build_default_config(tmp_path)
     with pytest.raises(ValueError, match="Level 0 3′ overhang"):

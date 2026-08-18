@@ -121,7 +121,11 @@ from .binder import (
     annotate_module_roles,
     normalize_target_rna,
 )
-from .gga_split import plan_gga_from_optimized_cds, suggest_fragment_count
+from .gga_split import (
+    co_design_gene_assembly,
+    plan_gga_from_optimized_cds,
+    suggest_fragment_count,
+)
 from .paths import (
     bundled_profile_genbank,
     materialize_project,
@@ -135,7 +139,7 @@ try:
 
     __version__ = version("grasp-library-designer")
 except PackageNotFoundError:  # pragma: no cover - editable/source tree
-    __version__ = "0.1.13"
+    __version__ = "0.1.14"
 
 __all__ = [
     "LigationFidelityCalculator",
@@ -237,6 +241,7 @@ __all__ = [
     "describe_part_id",
     "annotate_module_roles",
     "normalize_target_rna",
+    "co_design_gene_assembly",
     "plan_gga_from_optimized_cds",
     "suggest_fragment_count",
     "bundled_profile_genbank",
