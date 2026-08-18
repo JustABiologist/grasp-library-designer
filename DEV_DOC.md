@@ -17,11 +17,31 @@ Two design paths share one library:
 
 | Path | Entry point | What it produces |
 |---|---|---|
-| **One-shot** | `run_oneshot_design()` / `grasp_oneshot_designer.ipynb` | One target RNA → binder protein → joint Golden Gate oligos (cuts + overhangs + sequence) |
+| **One-shot** | `run_oneshot_design()` / `grasp_oneshot_designer.ipynb` | One target RNA → binder ORF (ATG-Met + helix + repeats) → joint Golden Gate oligos (cuts + overhangs + sequence) |
 | **Library** | `run_library_redesign_and_anneal()` / `grasp_library_designer.ipynb` | Redesign / anneal the 42-module combinatorial library, then GAP-compile a target |
 
 One-shot does not use library modules or ARELF. Cut sites, 4-nt overhangs, and
-the synonymous CDS are co-designed; destination sticky ends are cloning adapters.
+the synonymous CDS are co-designed; destination sticky ends are cloning adapters
+sitting outside the ORF. The ORF itself starts with ATG-Met, then the native
+solvating helix. Typing `AATG` in the one-shot 5′ destination field does **not**
+currently mean MoClo start-codon fusion (see §7 open item).
+
+One-shot oligo split: `min_oligo_length` / `max_oligo_length` (notebook default
+80 / 120 bp, wrapped Type IIS fragments). If either bound is > 0, fragment count
+is chosen from that window and `n_fragments` is ignored. Both 0 restores
+`n_fragments` (`0` = auto from the vendor cap).
+
+After design, `idt_opools.price_idt_opool` estimates one IDT oPools tube from
+those wrapped lengths (EUR list: €109 for the first 3,300 bases). Not a quote.
+
+One-shot Type IIS wraps use 7-nt PCR adapters (`ACAGCCA` / `GCCGATA`) instead of
+`TTT` / `AAA`, so the shared 5′/3′ arms are pool primers at ≈55 °C SantaLucia Tm
+(BsaI). Library pAGM1311 order arms stay `TTT` / `AAA`.
+
+One-shot also writes `oneshot_{rna}.gb`: assembled CDS, the ligated Golden Gate
+insert (destination overhangs + ORF), and one record per order oligo, with
+labels for CDS / helix / PPR repeats, 4-nt overhangs, Type IIS sites/cuts, and
+pool PCR primers. Library export `write_annotated_genbank` is unchanged.
 
 Hard constraints on the library path: protein sequence is fixed; movable
 four-base cuts stay inside the invariant `ARELF` motif (offsets 0–11).
@@ -142,6 +162,7 @@ touch.
 |---|---|
 | `assembly_interfaces.py` * | Presets (`deposited_grasp`, `custom`), physical 5′/3′ overhangs vs assembled coding sites, `build_order_fragment` / `extract_order_payload`. Has its own `reverse_complement` (duplicate of `dna.py`). |
 | `oneshot.py` * | `run_oneshot_design()`: RNA → binder → co-designed oligos. Also keeps pAGM1311 order-fragment validators for the library path. |
+| `genbank_export.py` | Annotated `.gb` writers. `write_annotated_genbank` = library pAGM1311 fragments; `write_oneshot_genbank` = one-shot CDS + insert + oligos. |
 | `dna.py` | Clean DNA/mask, RC, GC, homopolymer, k-mer penalties, forbidden sites, mask overlay. |
 | `restriction_sites.py` | ~100-enzyme cut-site blacklist (default SapI / BsaI / BpiI) merged into `forbidden_sites`. |
 
@@ -196,7 +217,8 @@ after `pip install -e ".[dev]"`.
 
 | File | What it locks in |
 |---|---|
-| `test_oneshot.py` | pAGM1311 validators; one-shot oligos assemble into 9S / 14S / 19S binder genes |
+| `test_oneshot.py` | pAGM1311 validators; one-shot oligos assemble into 9S / 14S / 19S binder genes; annotated `.gb` |
+| `test_genbank_export.py` | Library order-fragment GenBank labels (BsaI, Level −1/0 overhangs, CDS) |
 | `test_strand_semantics.py` | Physical sticky end vs coding site; directional terminal pairs |
 | `test_assembly_interfaces.py` | Preset geometry, validation, order-fragment arms |
 | `test_dashboard_interfaces.py` | Forms + widgets write the same overhang fields |
@@ -393,6 +415,23 @@ Each split is its own PR. Public imports in `__init__.py` must keep working
 - Replace simulated annealing with an external codon optimizer
 - Sphinx / mkdocs API docs
 - mypy in CI (wait until config is typed, or you will drown in `dict[str, Any]`)
+
+### Open: one-shot 5′ `AATG` as the start codon (do not ship a double ATG)
+
+Agreed with the user, not implemented yet.
+
+Today:
+
+- One-shot protein is `M` + solvating helix + repeats; CDS always starts `ATG`.
+- `destination_5prime_overhang` is a free-text cloning adapter prepended to that CDS (`CTCA` default).
+- Setting it to `AATG` yields fragment 1 `…GGTCTC` + `AATG` + `ATG` + helix (adapter **and** start codon).
+- Native `1A_*_AATG` is a different geometry (`QMGNSEE…`, Met as residue 2). One-shot must not switch to that just because the destination field is `AATG`.
+
+Wanted before we call the gene “MoClo start-fusion ready”:
+
+- If destination 5′ is `AATG`, that overhang **is** the initiating ATG (leading `A` is the fusion base; Met is not encoded a second time).
+- Any other 5′ destination keeps the current adapter-then-`ATG` layout.
+- Preview/STATUS and the first-oligo wrap must match that rule; add a test that `AATG` dest does not produce `AATGATG` as the start of the payload.
 
 ---
 

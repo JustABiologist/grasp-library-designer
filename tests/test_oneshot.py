@@ -4,12 +4,19 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from Bio import SeqIO
+
+from grasp_library.binder import FIVE_PRIME_SOLVATING_HELIX
 from grasp_library.codon_tables import load_codon_usage
 from grasp_library.control_panel import build_default_config
 from grasp_library.dna import reverse_complement, translate_dna
 from grasp_library.gga_split import assemble_payloads_to_cds
 from grasp_library.import_grasp import build_pagm1311_order_fragment, import_grasp_profile
-from grasp_library.oneshot import run_oneshot_design, validate_pagm1311_order_fragment
+from grasp_library.oneshot import (
+    resolve_oneshot_split_policy,
+    run_oneshot_design,
+    validate_pagm1311_order_fragment,
+)
 from grasp_library.paths import bundled_profile_genbank
 
 
@@ -88,6 +95,9 @@ def test_oneshot_oligos_assemble_into_the_binder_gene(inputs, tmp_path, target):
     info = result["binder"]
     assert result["summary"]["architecture"] == f"{len(target)}S"
     assert result["summary"]["translation_verified"] is True
+    assert info["aa_sequence"].startswith("MQGGNSEE")
+    assert result["cds"].startswith("ATG")
+    assert translate_dna(result["cds"][:3]) == "M"
     assert len(oligos) >= 2
     assert translate_dna(result["cds"]) == info["aa_sequence"]
     assembled = assemble_payloads_to_cds(
@@ -103,6 +113,7 @@ def test_oneshot_oligos_assemble_into_the_binder_gene(inputs, tmp_path, target):
     assert result["order_csv"].exists()
     assert result["order_fasta"].exists()
     assert result["gene_fasta"].exists()
+    assert result["genbank"].exists()
 
 
 def test_oneshot_junctions_are_synonymous_and_orthogonal(inputs, tmp_path):
@@ -171,11 +182,89 @@ def test_oneshot_honors_fragment_count_and_destination_overhangs(inputs, tmp_pat
     assert result["summary"]["destination_3prime_overhang"] == "GCTT"
     first = result["oligos"].iloc[0].order_sequence_5to3
     last = result["oligos"].iloc[-1].order_sequence_5to3
-    assert first.startswith("TTTGGTCTCAAATG")
+    assert first.startswith("ACAGCCAGGTCTCAAATG")
     assert first.count("GGTCTC") == 1
-    assert last.endswith("AAGCTGAGACCAAA")
+    assert last.endswith("AAGCTGAGACCGCCGATA")
     assert result["oligos"].iloc[0].oh5_coding_site_5to3 == "AATG"
     assert result["oligos"].iloc[-1].oh3_coding_site_5to3 == reverse_complement("GCTT")
+
+
+def _gb_labels(record) -> list[str]:
+    return [feature.qualifiers["label"][0] for feature in record.features]
+
+
+def test_oneshot_writes_annotated_genbank(inputs, tmp_path):
+    _, codon_data, default_config = inputs
+    config = copy.deepcopy(default_config)
+    config["oneshot"] = {
+        "n_fragments": 4,
+        "destination_5prime_overhang": "AATG",
+        "destination_3prime_overhang": "GCTT",
+        "wrap_enzyme": "BsaI",
+    }
+    result = run_oneshot_design(
+        target_rna="A" * 9,
+        codon_data=codon_data,
+        config=config,
+        output_dir=tmp_path,
+        n_fragments=4,
+        seed=3,
+        log=lambda *_: None,
+    )
+    records = list(SeqIO.parse(result["genbank"], "genbank"))
+    design = result["design"]
+    n = len(design.oligos)
+    assert len(records) == n + 2
+    cds_rec, insert_rec, *oligo_recs = records
+    dest3 = design.destination_3prime_coding
+    assert str(cds_rec.seq) == result["cds"]
+    assert str(insert_rec.seq) == design.destination_5prime + result["cds"] + dest3
+    assert [str(record.seq) for record in oligo_recs] == list(design.oligos)
+
+    cds_labels = _gb_labels(cds_rec)
+    assert "start codon ATG" in cds_labels
+    assert "solvating helix" in cds_labels
+    assert any(label.startswith("PPR1 A") for label in cds_labels)
+    assert any(label.startswith("junction overhang J1") for label in cds_labels)
+    helix = next(
+        feature
+        for feature in cds_rec.features
+        if feature.qualifiers["label"][0] == "solvating helix"
+    )
+    assert (
+        translate_dna(str(cds_rec.seq)[int(helix.location.start) : int(helix.location.end)])
+        == FIVE_PRIME_SOLVATING_HELIX
+    )
+    assert any(feature.type == "CDS" for feature in cds_rec.features)
+
+    insert_labels = _gb_labels(insert_rec)
+    assert "destination overhang 5' AATG" in insert_labels
+    assert f"destination overhang 3' {dest3}" in insert_labels
+
+    first, last = oligo_recs[0], oligo_recs[-1]
+    first_labels = _gb_labels(first)
+    last_labels = _gb_labels(last)
+    primers = result["pcr_primers"]
+    assert str(first.seq).startswith(primers["forward"])
+    assert "pool PCR forward" in first_labels
+    assert "pool PCR reverse" in first_labels
+    assert "BsaI recognition 5'" in first_labels
+    assert "BsaI recognition 3'" in first_labels
+    assert "BsaI 5' cut" in first_labels
+    assert "destination overhang 5' AATG" in first_labels
+    assert f"destination overhang 3' {dest3}" in last_labels
+    reverse_primer = next(
+        feature
+        for feature in first.features
+        if feature.qualifiers["label"][0] == "pool PCR reverse"
+    )
+    assert reverse_primer.location.strand == -1
+    rec3 = next(
+        feature
+        for feature in first.features
+        if feature.qualifiers["label"][0] == "BsaI recognition 3'"
+    )
+    assert rec3.location.strand == -1
 
 
 def test_oneshot_n_fragments_kwarg_is_not_rejected(inputs, tmp_path):
@@ -190,6 +279,72 @@ def test_oneshot_n_fragments_kwarg_is_not_rejected(inputs, tmp_path):
         log=lambda *_: None,
     )
     assert len(result["oligos"]) == 4
+
+
+def test_length_window_ignores_n_fragments(inputs, tmp_path):
+    _, codon_data, default_config = inputs
+    config = copy.deepcopy(default_config)
+    config["oneshot"] = {
+        "n_fragments": 4,
+        "min_oligo_length": 80,
+        "max_oligo_length": 120,
+        "wrap_enzyme": "BsaI",
+    }
+    result = run_oneshot_design(
+        target_rna="UUACACGUG",
+        codon_data=codon_data,
+        config=config,
+        output_dir=tmp_path,
+        n_fragments=4,
+        seed=3,
+        log=lambda *_: None,
+    )
+    lengths = result["oligos"]["oligo_length"].astype(int)
+    assert result["summary"]["split_by_oligo_length"] is True
+    assert len(result["oligos"]) != 4
+    assert lengths.min() >= 80
+    assert lengths.max() <= 120
+    assert result["idt_opool"]["dna_eur"] == 109.00
+
+
+def test_zero_length_bounds_restore_n_fragments(inputs, tmp_path):
+    _, codon_data, default_config = inputs
+    config = copy.deepcopy(default_config)
+    config["oneshot"] = {
+        "n_fragments": 4,
+        "min_oligo_length": 0,
+        "max_oligo_length": 0,
+        "wrap_enzyme": "BsaI",
+    }
+    result = run_oneshot_design(
+        target_rna="A" * 9,
+        codon_data=codon_data,
+        config=config,
+        output_dir=tmp_path,
+        seed=1,
+        log=lambda *_: None,
+    )
+    assert result["summary"]["split_by_oligo_length"] is False
+    assert len(result["oligos"]) == 4
+
+
+def test_split_policy_length_mode_and_both_zero():
+    assert resolve_oneshot_split_policy(
+        {"min_oligo_length": 80, "max_oligo_length": 120, "n_fragments": 6}
+    ) == {
+        "length_mode": True,
+        "n_fragments": None,
+        "min_oligo_length": 80,
+        "max_oligo_length": 120,
+    }
+    assert resolve_oneshot_split_policy(
+        {"min_oligo_length": 0, "max_oligo_length": 0, "n_fragments": 6}
+    ) == {
+        "length_mode": False,
+        "n_fragments": 6,
+        "min_oligo_length": None,
+        "max_oligo_length": None,
+    }
 
 
 def test_invalid_target_characters_are_not_silently_deleted():

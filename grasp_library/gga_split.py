@@ -30,8 +30,10 @@ TYPE_IIS_GEOMETRY: Dict[str, Dict[str, object]] = {
         "recognition_site": "GGTCTC",
         "spacer_len": 1,
         "overhang_len": 4,
-        "clamp_5p": "TTT",
-        "clamp_3p": "AAA",
+        # PCR adapters (not RC of each other). Full 5′/3′ arms are the
+        # pool primers; BsaI SantaLucia Tm ≈ 55 °C.
+        "clamp_5p": "ACAGCCA",
+        "clamp_3p": "GCCGATA",
         "fidelity_level": "level_minus1",
     },
     "BbsI": {
@@ -39,8 +41,8 @@ TYPE_IIS_GEOMETRY: Dict[str, Dict[str, object]] = {
         "recognition_site": "GAAGAC",
         "spacer_len": 2,
         "overhang_len": 4,
-        "clamp_5p": "TTT",
-        "clamp_3p": "AAA",
+        "clamp_5p": "ACAGCCA",
+        "clamp_3p": "GCCGATA",
         "fidelity_level": "level0",
     },
     "BpiI": {
@@ -48,8 +50,8 @@ TYPE_IIS_GEOMETRY: Dict[str, Dict[str, object]] = {
         "recognition_site": "GAAGAC",
         "spacer_len": 2,
         "overhang_len": 4,
-        "clamp_5p": "TTT",
-        "clamp_3p": "AAA",
+        "clamp_5p": "ACAGCCA",
+        "clamp_3p": "GCCGATA",
         "fidelity_level": "level0",
     },
     "BsmBI": {
@@ -57,8 +59,8 @@ TYPE_IIS_GEOMETRY: Dict[str, Dict[str, object]] = {
         "recognition_site": "CGTCTC",
         "spacer_len": 1,
         "overhang_len": 4,
-        "clamp_5p": "TTT",
-        "clamp_3p": "AAA",
+        "clamp_5p": "ACAGCCA",
+        "clamp_3p": "GCCGATA",
         "fidelity_level": "level_minus1",
     },
 }
@@ -123,6 +125,42 @@ def wrap_payload(payload: str, geometry: Mapping[str, object]) -> str:
         ("T" * spacer) + reverse_complement(site) + clean_dna(str(geometry["clamp_3p"]))
     )
     return prefix + payload + suffix
+
+
+def wrap_pcr_primers(geometry: Mapping[str, object]) -> Dict[str, object]:
+    """Forward/reverse primers = the shared 5′/3′ wrap arms (pool amplification)."""
+    from Bio.SeqUtils import MeltingTemp as melting
+
+    site = clean_dna(str(geometry["recognition_site"]))
+    spacer = int(geometry["spacer_len"])
+    forward = clean_dna(str(geometry["clamp_5p"])) + site + ("A" * spacer)
+    suffix = (
+        ("T" * spacer) + reverse_complement(site) + clean_dna(str(geometry["clamp_3p"]))
+    )
+    reverse = reverse_complement(suffix)
+
+    def _tm(seq: str) -> float:
+        return float(
+            melting.Tm_NN(
+                seq,
+                nn_table=melting.DNA_NN3,
+                Na=50,
+                Mg=1.5,
+                dnac1=250,
+                dnac2=0,
+                dNTPs=0.2,
+            )
+        )
+
+    tm_f = _tm(forward)
+    tm_r = _tm(reverse)
+    return {
+        "forward": forward,
+        "reverse": reverse,
+        "tm_forward_c": round(tm_f, 1),
+        "tm_reverse_c": round(tm_r, 1),
+        "anneal_c": round(min(tm_f, tm_r) - 3.0, 1),
+    }
 
 
 def suggest_fragment_count(
@@ -726,18 +764,16 @@ def _max_aa_per_fragment(
     geometry: Mapping[str, object],
     n_fragments: int,
 ) -> int:
+    del n_fragments
     overhead = oligo_flank_overhead(geometry)
-    # Payload includes two 4-nt overhangs (destination and/or junction).
-    max_payload = max_oligo - overhead
-    # Internal fragment payload = 3*aa + 4 (5′ overlap). First adds dest5 (+4)
-    # already counted; last adds dest3 (+4).
-    return max(8, (max_payload - 8) // 3)
+    # Last fragment is the longest wrap: flanks + 4 nt 5′ overlap + CDS + dest3.
+    return max(4, (max_oligo - overhead - 8) // 3)
 
 
 def _min_aa_per_fragment(*, min_oligo: int, geometry: Mapping[str, object]) -> int:
     overhead = oligo_flank_overhead(geometry)
-    min_payload = max(0, min_oligo - overhead)
-    return max(8, (min_payload - 8 + 2) // 3)
+    # First/internal wrap: flanks + 4 nt 5′ overhang + CDS.
+    return max(4, math.ceil(max(0, min_oligo - overhead - 4) / 3))
 
 
 def _choose_fragment_count(
@@ -746,20 +782,28 @@ def _choose_fragment_count(
     n_fragments: Optional[int],
     min_aa: int,
     max_aa: int,
-    max_fragments: int = 8,
+    max_fragments: int = 64,
 ) -> int:
     if n_fragments is not None:
         n = int(n_fragments)
         if n < 1:
             raise ValueError("n_fragments must be ≥ 1")
         return n
-    n = max(1, math.ceil(n_aa / max(max_aa, 1)))
-    n = min(max_fragments, n)
-    if n_aa > n * max_aa:
-        n = min(max_fragments, math.ceil(n_aa / max_aa))
-    if n > 1 and n_aa < n * min_aa:
-        n = max(1, n_aa // min_aa)
-    return int(n)
+    max_aa = max(int(max_aa), 1)
+    min_aa = max(int(min_aa), 1)
+    n_lo = max(1, math.ceil(n_aa / max_aa))
+    n_hi = max(1, n_aa // min_aa)
+    if n_lo > n_hi:
+        raise ValueError(
+            f"Protein length {n_aa} aa cannot be split so every fragment is "
+            f"{min_aa}–{max_aa} aa. Widen min/max oligo length."
+        )
+    if n_lo > max_fragments:
+        raise ValueError(
+            f"Need at least {n_lo} fragments to stay within max oligo length "
+            f"({max_aa} aa / fragment, {n_aa} aa protein)."
+        )
+    return int(n_lo)
 
 
 def _refine_layout(
@@ -1026,10 +1070,16 @@ def co_design_gene_assembly(
         raise AssertionError("Fragment payloads do not reconstruct the designed CDS")
     best.oligos = [wrap_payload(payload, geometry) for payload in best.payloads]
     for oligo in best.oligos:
-        if len(oligo) > max_oligo:
+        n = len(oligo)
+        if n > max_oligo:
             raise RuntimeError(
-                f"Designed oligo is {len(oligo)} bp, above max_oligo_length={max_oligo}. "
+                f"Designed oligo is {n} bp, above max_oligo_length={max_oligo}. "
                 "Increase n_fragments or the oligo length cap."
+            )
+        if min_oligo and n < min_oligo:
+            raise RuntimeError(
+                f"Designed oligo is {n} bp, below min_oligo_length={min_oligo}. "
+                "Use fewer fragments or lower the oligo length floor."
             )
     return best
 

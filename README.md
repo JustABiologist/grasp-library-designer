@@ -65,10 +65,14 @@ write_notebook("oneshot")   # or "library"
 | [`grasp_oneshot_designer.ipynb`](grasp_oneshot_designer.ipynb) | One target RNA → binder protein → joint Golden Gate gene design (cuts, overhangs, sequence) → orderable oligos |
 | [`grasp_library_designer.ipynb`](grasp_library_designer.ipynb) | Redesign / anneal the 42-module combinatorial library, then GAP-compile a target |
 
-One-shot does **not** emit combinatorial library modules. It co-designs codon-aligned
-cut sites, high-fidelity 4-nt overhangs, and a synonymous CDS (codon optimality,
-cut-site depletion, synthesis heuristics), then wraps each fragment with inward-facing
-Type IIS arms and destination sticky ends.
+One-shot does **not** emit combinatorial library modules. It builds an ORF that
+starts with ATG-Met, then the native solvating helix and PPR repeats, co-designs
+codon-aligned cut sites, high-fidelity 4-nt overhangs, and a synonymous CDS
+(codon optimality, cut-site depletion, synthesis heuristics), then wraps each
+fragment with inward-facing Type IIS arms and destination sticky ends. Design
+also writes a multi-record `.gb` (assembled ORF, ligated insert with destination
+overhangs, and each order oligo) labelled with CDS, PPR repeats, 4-nt overhangs,
+Type IIS cut sites, and the shared pool PCR primers.
 
 Hard constraints (library path): the protein sequence is fixed and every movable
 four-base cut is restricted to the invariant `ARELF` motif. The search explores

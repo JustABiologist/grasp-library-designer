@@ -132,7 +132,7 @@ from .paths import (
     project_paths,
 )
 from .colab import write_notebook
-from .genbank_export import write_annotated_genbank
+from .genbank_export import write_annotated_genbank, write_oneshot_genbank
 
 try:
     from importlib.metadata import PackageNotFoundError, version
@@ -249,5 +249,6 @@ __all__ = [
     "project_paths",
     "write_notebook",
     "write_annotated_genbank",
+    "write_oneshot_genbank",
     "__version__",
 ]

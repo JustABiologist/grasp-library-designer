@@ -64,15 +64,23 @@ def rna_to_ppr_pairs(target_rna: str) -> List[Tuple[str, str]]:
     return [_RNA_TO_CODE[b] for b in rna]
 
 
-def rna_to_binder_aa(target_rna: str) -> str:
+def rna_to_binder_aa(
+    target_rna: str, *, include_start_codon: bool = False
+) -> str:
     """
     Build the continuous GRASP binder protein for a target RNA.
 
     Does **not** use combinatorial library modules — only the PPR code and
     the validated GRASP repeat scaffold (matches oh-bounded native 9S assemblies).
+
+    Deposited 1A modules begin at the solvating helix (Q…). One-shot genes
+    pass ``include_start_codon=True`` so the ORF starts with Met/ATG.
     """
     pairs = rna_to_ppr_pairs(target_rna)
-    parts = [FIVE_PRIME_SOLVATING_HELIX]
+    parts = []
+    if include_start_codon:
+        parts.append("M")
+    parts.append(FIVE_PRIME_SOLVATING_HELIX)
     for fifth, last in pairs:
         parts.append(REPEAT_TEMPLATE.format(fifth=fifth, last=last))
     return "".join(parts)
@@ -83,9 +91,12 @@ def ppr_code_string(target_rna: str) -> str:
     return "".join(f"{a}{b}" for a, b in rna_to_ppr_pairs(target_rna))
 
 
-def describe_binder(target_rna: str) -> dict:
+def describe_binder(
+    target_rna: str, *, include_start_codon: bool = True
+) -> dict:
+    """Describe the binder ORF. One-shot default includes the initiating Met."""
     rna = normalize_target_rna(target_rna)
-    aa = rna_to_binder_aa(rna)
+    aa = rna_to_binder_aa(rna, include_start_codon=include_start_codon)
     pairs = rna_to_ppr_pairs(rna)
     return {
         "target_rna": rna,
@@ -96,6 +107,7 @@ def describe_binder(target_rna: str) -> dict:
         "aa_length": len(aa),
         "cds_length": 3 * len(aa),
         "n_repeats": len(pairs),
+        "include_start_codon": bool(include_start_codon),
     }
 
 

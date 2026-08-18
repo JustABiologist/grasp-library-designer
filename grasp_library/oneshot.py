@@ -2,14 +2,17 @@
 
 The combinatorial GRASP library and ARELF junctions live on the library path.
 One-shot co-designs cut sites, overhangs, and coding sequence for a single
-binder, then wraps the fragments as orderable Type IIS oligos.
+binder ORF (ATG / Met, then the native solvating helix and PPR repeats), then
+wraps the fragments as orderable Type IIS oligos. Destination sticky ends are
+cloning adapters sitting 5′/3′ of that ORF; they are not a substitute for the
+start codon.
 """
 
 from __future__ import annotations
 
 import random
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Mapping, Optional
 
 import numpy as np
 import pandas as pd
@@ -26,13 +29,16 @@ from .assembly_interfaces import (
 from .binder import describe_binder, normalize_target_rna
 from .codon_validation import verify_cds_for_organism
 from .dna import clean_dna, gc_fraction, mask_matches
+from .genbank_export import write_oneshot_genbank
 from .gga_split import (
     assembly_plan_frame,
     co_design_gene_assembly,
     oligo_flank_overhead,
     resolve_wrap_enzyme,
     wrap_geometry,
+    wrap_pcr_primers,
 )
+from .idt_opools import quote_from_oligo_table
 from .ligation_fidelity import LigationFidelityCalculator
 from .optimizer import synthesis_qc
 from .synthesis_vendors import ligation_protocol_for_level
@@ -40,6 +46,59 @@ from .synthesis_vendors import ligation_protocol_for_level
 
 ENTRY_CLONING_ENZYME = "BsaI"
 MODULE_RELEASE_ENZYME = "BpiI / BbsI"
+
+
+def _as_oligo_length(value: Any) -> int:
+    if value is None or value is False:
+        return 0
+    if isinstance(value, str) and value.strip().lower() in {"", "0", "auto", "none"}:
+        return 0
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return n if n > 0 else 0
+
+
+def resolve_oneshot_split_policy(
+    oneshot_cfg: Mapping[str, Any],
+    *,
+    n_fragments: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Choose fragment count vs oligo-length window.
+
+    If min or max oligo length is > 0, those bounds pick the split and
+    ``n_fragments`` is ignored. Both 0 (or unset) restores ``n_fragments``
+    (including auto from the vendor length cap).
+    """
+    min_oligo = _as_oligo_length(oneshot_cfg.get("min_oligo_length"))
+    max_oligo = _as_oligo_length(oneshot_cfg.get("max_oligo_length"))
+    requested = n_fragments if n_fragments is not None else oneshot_cfg.get(
+        "n_fragments"
+    )
+    if requested in (0, "auto", "Auto", None, ""):
+        requested = None
+    elif requested is not None:
+        requested = int(requested)
+
+    length_mode = min_oligo > 0 or max_oligo > 0
+    if length_mode:
+        if min_oligo and max_oligo and min_oligo > max_oligo:
+            raise ValueError(
+                f"min_oligo_length ({min_oligo}) must be ≤ max_oligo_length ({max_oligo})"
+            )
+        return {
+            "length_mode": True,
+            "n_fragments": None,
+            "min_oligo_length": min_oligo or None,
+            "max_oligo_length": max_oligo or None,
+        }
+    return {
+        "length_mode": False,
+        "n_fragments": requested,
+        "min_oligo_length": None,
+        "max_oligo_length": None,
+    }
 
 
 def sanitize_rna_name(target_rna: str) -> str:
@@ -302,27 +361,34 @@ def run_oneshot_design(
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    info = describe_binder(target_rna)
+    info = describe_binder(target_rna, include_start_codon=True)
     rna = info["target_rna"]
     oneshot_cfg = dict(config.get("oneshot") or {})
     wrap_enzyme = resolve_wrap_enzyme(
         oneshot_cfg.get("wrap_enzyme") or config.get("wrap_enzyme") or "BsaI"
     )
+    geometry = wrap_geometry(wrap_enzyme)
+    primers = wrap_pcr_primers(geometry)
     dest5, dest3 = _destination_overhangs(config)
-    requested_fragments = n_fragments if n_fragments is not None else oneshot_cfg.get(
-        "n_fragments"
-    )
-    if requested_fragments in (0, "auto", "Auto"):
-        requested_fragments = None
+    policy = resolve_oneshot_split_policy(oneshot_cfg, n_fragments=n_fragments)
+    requested_fragments = policy["n_fragments"]
 
     local_config = dict(config)
     forbidden = dict(local_config.get("forbidden_sites") or {})
     site = str(wrap_geometry(wrap_enzyme)["recognition_site"])
     forbidden.setdefault(wrap_enzyme, site)
     local_config["forbidden_sites"] = forbidden
+    if policy["length_mode"]:
+        synth = dict(local_config.get("synthesis") or {})
+        if policy["min_oligo_length"]:
+            synth["min_oligo_length"] = int(policy["min_oligo_length"])
+        if policy["max_oligo_length"]:
+            synth["max_oligo_length"] = int(policy["max_oligo_length"])
+        local_config["synthesis"] = synth
 
     calc = _fidelity_calculator(local_config, wrap_enzyme, fidelity)
-    max_oligo = oneshot_cfg.get("max_oligo_length")
+    max_oligo = policy["max_oligo_length"]
+    min_oligo = policy["min_oligo_length"]
     if max_fragment_cds is not None:
         max_oligo = int(max_fragment_cds) + oligo_flank_overhead(
             wrap_geometry(wrap_enzyme)
@@ -342,6 +408,7 @@ def run_oneshot_design(
             wrap_enzyme=wrap_enzyme,
             fidelity=calc,
             max_oligo_length=max_oligo,
+            min_oligo_length=min_oligo,
         )
     finally:
         random.setstate(old_py_state)
@@ -363,6 +430,8 @@ def run_oneshot_design(
     )
     if not translation.get("ok"):
         raise AssertionError("Designed CDS does not translate to the binder protein")
+    if not design.cds.startswith("ATG"):
+        raise AssertionError("One-shot CDS must start with ATG")
 
     assembled = {
         "assembled_cds": design.cds,
@@ -383,6 +452,7 @@ def run_oneshot_design(
     order_fasta = output_dir / f"oneshot_{rna}_orderable_fragments.fasta"
     legacy_fasta = output_dir / f"oneshot_{rna}_oligos.fasta"
     gene_fasta = output_dir / f"oneshot_{rna}_gene.fasta"
+    gene_gb = output_dir / f"oneshot_{rna}.gb"
 
     plan.to_csv(plan_path, index=False)
     oligos.to_csv(order_csv, index=False)
@@ -398,6 +468,13 @@ def run_oneshot_design(
         f">GRASP_{rna}|binder_CDS|{info['aa_length']}aa|{len(design.cds)}nt\n"
         f"{design.cds}\n"
     )
+    write_oneshot_genbank(
+        gene_gb,
+        design,
+        info,
+        primers=primers,
+        genetic_code=int(local_config.get("genetic_code", 1)),
+    )
 
     summary = {
         "target_rna": rna,
@@ -407,6 +484,9 @@ def run_oneshot_design(
         "cds_length": len(design.cds),
         "n_fragments": len(design.oligos),
         "n_unique_order_fragments": len(oligos),
+        "split_by_oligo_length": bool(policy["length_mode"]),
+        "min_oligo_length": min_oligo,
+        "max_oligo_length": max_oligo,
         "wrap_enzyme": design.wrap_enzyme,
         "destination_5prime_overhang": design.destination_5prime,
         "destination_3prime_overhang": design.destination_3prime,
@@ -425,14 +505,29 @@ def run_oneshot_design(
         "organism": local_config.get("selected_organism")
         or local_config.get("selected_organism_label"),
         "standalone_expression_cassette": False,
+        "pcr_forward": primers["forward"],
+        "pcr_reverse": primers["reverse"],
+        "pcr_tm_forward_c": primers["tm_forward_c"],
+        "pcr_tm_reverse_c": primers["tm_reverse_c"],
+        "pcr_anneal_c": primers["anneal_c"],
     }
+    quote = quote_from_oligo_table(oligos)
+    for key, value in quote.items():
+        if key in {"warnings", "eligible_scales"}:
+            summary[f"idt_opool_{key}"] = ";".join(str(v) for v in value)
+        else:
+            summary[f"idt_opool_{key}"] = value
     pd.DataFrame([summary]).to_csv(
         output_dir / f"oneshot_{rna}_summary.csv", index=False
+    )
+    pd.DataFrame([quote]).to_csv(
+        output_dir / f"oneshot_{rna}_idt_opool.csv", index=False
     )
 
     log(
         f"✓ One-shot {len(rna)}S: {len(oligos)} {design.wrap_enzyme} oligos; "
-        f"fidelity {design.ligation_fidelity:.4f}; translation checked"
+        f"fidelity {design.ligation_fidelity:.4f}; "
+        f"IDT oPools ~€{quote['dna_eur']:.0f}; translation checked"
     )
     return {
         "target_rna": rna,
@@ -446,12 +541,15 @@ def run_oneshot_design(
         "oligos": oligos,
         "orderable_fragments": oligos,
         "assembled": assembled,
+        "idt_opool": quote,
+        "pcr_primers": primers,
         "output_dir": output_dir,
         "oligo_csv": legacy_csv,
         "oligo_fasta": legacy_fasta,
         "order_csv": order_csv,
         "order_fasta": order_fasta,
         "gene_fasta": gene_fasta,
+        "genbank": gene_gb,
         "selected_overhangs": {
             f"J{i + 1}": oh for i, oh in enumerate(design.overhangs)
         },

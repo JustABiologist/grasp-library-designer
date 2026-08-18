@@ -182,6 +182,11 @@ def test_oneshot_notebook_forms_expose_destination_overhangs():
         assert "level_minus1_5prime_overhang" not in source
         assert "arelf_offset" not in source.lower()
         assert "co-design" in source.lower() or "joint" in source.lower()
+        assert "min_oligo_length = 80" in source
+        assert "max_oligo_length = 120" in source
+        assert "n_fragments = 0" in source
+        assert "idt_opool" in source
+        assert "IDT oPools" in source
 
 
 def test_form_rejects_invalid_level_overhang(tmp_path: Path):
