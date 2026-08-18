@@ -6,7 +6,7 @@ surrogates, vendor QC is not an acceptance letter) also stay in the README.
 
 PyPI name: `grasp-library-designer`  
 Import name: `grasp_library`  
-Current version: `0.1.11` (see `pyproject.toml`)  
+Current version: `0.1.15` (see `pyproject.toml`)  
 License: AGPL-3.0 (required by the vendored GGAssembler ligation engine)
 
 ---
@@ -254,7 +254,7 @@ package, falling back to `third_party/` in a raw checkout.
 
 `grasp_oneshot_designer.ipynb` and `grasp_library_designer.ipynb` are what
 the README Colab badges open. Cell **0 · Install** currently pins PyPI
-(`grasp-library-designer>=0.1.14`) and purges stale `grasp_library` modules
+(`grasp-library-designer>=0.1.15`) and purges stale `grasp_library` modules
 from `sys.modules`. Keep that purge if you change the install cell.
 
 ---
